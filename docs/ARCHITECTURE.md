@@ -800,3 +800,86 @@ the payments/orders this same function goes out of its way to preserve.
 Found the same way as Phase 6's two: a STAFF fixture acting on a different
 test user's contact, failing cleanup with a foreign-key violation instead
 of a silent pass.
+
+## 25. Phase 8: Training portal
+
+**Who the training portal is for is not a guess — it's in the affiliate
+FAQ already shipped in Phase 1.** `src/lib/repository.ts`'s
+"affiliate-fee-why" answer says the ₹2,000 registration fee covers "the
+training and onboarding materials that come with joining as an affiliate."
+So `canAccessTraining` (`src/lib/training/access.ts`) gates every
+learner-facing endpoint on **ACTIVE affiliate status**, not on being a
+customer or logged in generally — plus `training.course.author` holders
+(staff previewing what they're authoring, independent of whether they
+happen to also be an affiliate). No new permission was needed: all three
+`training.*` permissions were already in the Phase 2 catalogue, unused
+until now.
+
+**"Draft content is absent from every query a learner's screen can see"
+(§10) is enforced by starting from an already-published parent, not by a
+combined ancestor filter at every level.** `src/lib/training/catalogue.ts`'s
+`getPublishedCourses`/`getPublishedCourseDetail` fetch a course WHERE
+`status = 'PUBLISHED'`, then its modules WHERE `status = 'PUBLISHED'`, then
+each module's videos WHERE `status = 'PUBLISHED'` — nesting the filter at
+every level is what makes it airtight, since nothing above ever hands a
+lower level an unpublished parent to fetch children from. The one place
+that isn't naturally nested — a video linked to directly by id, e.g. from a
+player page's URL — gets its own function, `getPublishedVideoWithContext`,
+which independently joins and filters video AND module AND course
+together in one query, so a stale or hand-typed video id can't reach
+content whose ancestor was unpublished after the fact.
+
+**Publish guards check the CURRENT state of the parent, not history.**
+"A lesson cannot be published before its parent module and course are"
+(§10) sounds like a one-time check, but a course can be unpublished again
+after its module was already published — `unpublishCourse` doesn't cascade
+to its modules' status columns (the read-time filtering above makes that
+unnecessary for learners). So `publishModule`/`publishVideo`
+(`src/lib/training/authoring.ts`) re-fetch and re-check every parent's
+CURRENT status on every call, never trusting that a child's own status
+column having reached PUBLISHED once means its ancestors still are.
+Caught by a test that publishes a course and module, unpublishes the
+course, then tries to publish a brand-new video under the still-"PUBLISHED"
+module — correctly refused.
+
+**Progress is computed in a locked transaction, not a raw SQL `GREATEST`.**
+The schema comment on `training_progress` suggested
+`GREATEST(new, old)`-on-conflict; Drizzle can't express that declaratively,
+and the sticky-completion rule (§10: "completes at 90% watched, not 100%,"
+never un-completes on a later partial rewatch) needs the same read to
+decide both the monotonic `secondsWatched` AND whether `completedAt`
+should newly be set — two things a single SQL expression would have to
+compute independently and keep consistent. `recordProgress`
+(`src/lib/training/progress.ts`) instead row-locks the existing progress
+row (`for('update')`, same pattern as every other guarded transition in
+this codebase), computes both in JS from that one read, and writes once.
+
+**Reporting is a separate permission from authoring, on purpose — and a
+test initially got this wrong, not the app.** `training.progress.view_all`
+is not part of CONTENT_MANAGER's default role; only ADMIN carries it. The
+first version of `tests/training-routes.test.ts` assumed the content
+author could also pull the completion report and got a real 403 back —
+correct behavior surfacing a wrong test assumption. Fixed by asserting the
+403 explicitly (a real negative case worth keeping) and granting a
+separate ADMIN fixture for the actual report assertion, rather than
+loosening the permission to make the test pass.
+
+**Video hosting stays a plain URL column, not a new upload pipeline.**
+D-10 (§13) anticipated an S3-shaped storage interface for "Phase 8 training
+videos," but the schema `training_videos.video_url` committed to at Phase 0
+is simpler: a plain external URL, authored directly (paste a link to
+wherever the video is actually hosted), same as how `repository.ts`'s
+`howItWorks` copy is plain text rather than a CMS reference. The learner
+player is a native `<video>` element — works for any directly-playable
+URL (e.g. an S3/CDN-hosted file); a third-party platform's own embed/SDK
+(YouTube, Vimeo) with its own progress-tracking API is future work if that
+hosting choice is ever made instead, and would only touch
+`src/components/TrainingCourseDetail.tsx`, nothing server-side.
+
+Not built this phase, and deliberately not invented as placeholder data:
+actual course content. "10 courses" in §10 describes the catalogue's
+intended eventual SCALE, not fixture data this build should fabricate —
+unlike Phase 1's three real services, there is no real training script to
+seed, so none was invented. The full authoring UI (`/training/admin`)
+supports creating any number of courses/modules/videos once real content
+exists.

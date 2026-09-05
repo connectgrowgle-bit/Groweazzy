@@ -57,9 +57,21 @@ decisions still open.
   board) and `/crm/[id]` (activity timeline, notes, tasks, manual
   stage/owner edits), all on Phase 2's existing `crm.*` permissions. See
   [`docs/ARCHITECTURE.md` §24](docs/ARCHITECTURE.md#24-phase-7-crm).
+- **Phase 8 (Training portal)** — done. Gated to ACTIVE affiliates (the
+  fee's own FAQ copy says it pays for this) or staff who can author, via
+  `canAccessTraining` (`src/lib/training/access.ts`) — no new permissions
+  needed. Draft content is invisible to learners by construction: every
+  read starts from an already-published parent and nests the filter down
+  (`src/lib/training/catalogue.ts`), and a video linked to directly gets
+  its own full-ancestor-chain check. Publish guards
+  (`src/lib/training/authoring.ts`) re-check each parent's CURRENT status
+  on every call, not history. Progress is monotonic, clamped to duration,
+  and completes at 90% — computed under a row lock
+  (`src/lib/training/progress.ts`), not a raw SQL `GREATEST`. See
+  [`docs/ARCHITECTURE.md` §25](docs/ARCHITECTURE.md#25-phase-8-training-portal).
 
-Not yet built: training, admin dashboard, the commission scheduler, and the
-security audit. See
+Not yet built: admin dashboard, the commission scheduler, and the security
+audit. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -141,6 +153,7 @@ src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commi
 src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
 src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
 src/lib/crm/      self-populating contact sync (called from transitionOrderStage), manual edits/notes/tasks/assignment
+src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authoring/publish guards, progress tracking
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
 src/lib/          repository.ts (content seam), catalogue.ts (bridges it to real DB rows), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts

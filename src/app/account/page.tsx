@@ -4,6 +4,7 @@ import { PageShell } from '@/components/PageShell';
 import { LogoutButton } from '@/components/LogoutButton';
 import { getActor } from '@/lib/auth/actor';
 import { getPermissionsForUser } from '@/lib/auth/rbac';
+import { canAccessTraining } from '@/lib/training/access';
 
 export const metadata = { title: 'Account — GrowEazzy' };
 
@@ -17,6 +18,7 @@ export default async function AccountPage() {
   if (!actor) redirect('/login');
 
   const permissions = await getPermissionsForUser(actor.user.id);
+  const canSeeTraining = await canAccessTraining(actor.user.id);
 
   return (
     <PageShell>
@@ -46,6 +48,16 @@ export default async function AccountPage() {
           {permissions.includes('crm.view') && (
             <Link href="/crm" className="text-sm text-brand hover:underline">
               CRM →
+            </Link>
+          )}
+          {canSeeTraining && (
+            <Link href="/training" className="text-sm text-brand hover:underline">
+              Training →
+            </Link>
+          )}
+          {permissions.includes('training.course.author') && (
+            <Link href="/training/admin" className="text-sm text-brand hover:underline">
+              Training — Author →
             </Link>
           )}
         </div>
