@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { PageShell } from '@/components/PageShell';
 import { LogoutButton } from '@/components/LogoutButton';
@@ -38,7 +39,12 @@ export default async function AccountPage() {
           )}
         </dl>
 
-        <div className="mt-8">
+        <div className="mt-8 flex items-center gap-4">
+          <Link href="/affiliate/dashboard" className="text-sm text-brand hover:underline">
+            Affiliate dashboard →
+          </Link>
+        </div>
+        <div className="mt-4">
           <LogoutButton />
         </div>
       </section>

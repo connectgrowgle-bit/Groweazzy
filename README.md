@@ -15,11 +15,17 @@ decisions still open.
 - **Phase 2 (Auth & RBAC)** — done. Argon2id, database sessions (sliding +
   absolute + watermark expiry), 39-permission catalogue with 5 default
   roles, enumeration-safe login, `/account` as a real protected page.
+- **Phase 3 (Affiliate system)** — done. Lifecycle state machine
+  (REGISTERED→KYC_PENDING→KYC_SUBMITTED→(KYC_REJECTED\|FEE_PENDING\|ACTIVE)→(SUSPENDED\|TERMINATED)),
+  AES-256-GCM-encrypted KYC with keyed-HMAC duplicate-PAN detection, a
+  `PaymentGateway` interface with `MockPaymentGateway`, and the affiliate
+  registration fee flow wired end-to-end (mock payment only — Razorpay is
+  Phase 5).
 
-Not yet built: affiliate system, payments, client workflow, CRM, training,
+Not yet built: real payments (Razorpay), client workflow, CRM, training,
 admin dashboard, the commission scheduler, and the security audit. See
-[`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for what
-needs business sign-off before Phase 3 (affiliate system) starts.
+[`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
+business decisions (D-1 through D-10) this build still needs sign-off on.
 
 ## Stack
 
@@ -67,12 +73,15 @@ DATABASE_URL=postgres://USER:PASS@localhost:5432/groweazzy_test ./ops/migrate.sh
 DATABASE_URL=postgres://USER:PASS@localhost:5432/groweazzy_test npm test
 ```
 
-`tests/auth-routes.test.ts` additionally spawns a real `next dev` server on
-port 3901 and drives it over HTTP — required because
-`src/lib/auth/cookies.ts` uses `next/headers`, which only works inside
-Next's own request pipeline, not when a route handler is called as a plain
-function. This is also closer to the project brief's own testing
-philosophy: real server, real database, no mocks.
+`tests/global-setup.ts` builds the app once and starts a single shared
+`next start` server (port 3900) for the whole run, torn down after —
+`tests/auth-routes.test.ts` and `tests/affiliate-routes.test.ts` drive it
+over real HTTP rather than calling route handlers as plain functions,
+required because `src/lib/auth/cookies.ts` uses `next/headers`, which only
+works inside Next's own request pipeline. It's one shared server, not one
+per test file, because Next.js 16 refuses to run a second `next dev` (or,
+it turns out, the naive equivalent) against the same project directory —
+see `docs/ARCHITECTURE.md` §20 for what that looked like before this fix.
 
 ## Project layout
 
@@ -80,6 +89,9 @@ philosophy: real server, real database, no mocks.
 src/app/          Next.js App Router pages and API routes
 src/db/schema/    Drizzle schema, one file per domain (auth, client, affiliate, training, support)
 src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue
+src/lib/affiliate/  lifecycle state machine, KYC, registration fee flow, commission policy
+src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
+src/lib/payments/ PaymentGateway interface + MockPaymentGateway
 src/lib/          repository.ts (content seam), env.ts (startup validation), db-errors.ts
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment

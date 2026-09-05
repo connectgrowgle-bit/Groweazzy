@@ -11,7 +11,7 @@ import { SESSION_COOKIE_NAME } from '@/lib/auth/cookies';
 // it); deleting this file must not make anything more accessible — verify
 // that by checking that every route under `PROTECTED_PREFIXES` also calls
 // getActor()/requireActor()/requirePermission() server-side.
-const PROTECTED_PREFIXES = ['/account'];
+const PROTECTED_PREFIXES = ['/account', '/affiliate/dashboard'];
 
 export function middleware(request: NextRequest) {
   const isProtected = PROTECTED_PREFIXES.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
@@ -28,5 +28,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/account/:path*'],
+  matcher: ['/account/:path*', '/affiliate/dashboard/:path*'],
 };

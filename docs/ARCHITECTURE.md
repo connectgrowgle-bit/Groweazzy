@@ -370,8 +370,9 @@ starting Phase 1's static pages, but D-1, D-2, D-3 and D-5 shape the schema
 Phase 4 builds on, so they should land before Phase 3 starts in earnest.
 
 Build order from here follows the phases in the project brief: Phase 1
-(public site + repository seam), Phase 2 (auth & RBAC) — both done, see
-§19 — then Phase 3 (affiliate system) next.
+(public site + repository seam), Phase 2 (auth & RBAC), Phase 3 (affiliate
+system) — all done, see §19-§20 — then Phase 4 (attribution & commission)
+next.
 
 ## 19. Phase 2 notes: two real mistakes caught before they shipped
 
@@ -401,3 +402,60 @@ Both are covered by regression tests (`tests/db-errors.test.ts`; the seed
 script running successfully with only `DATABASE_URL` set is exercised by
 `npm run db:seed:roles` in the getting-started flow) so they can't silently
 reappear.
+
+## 20. Phase 3 notes
+
+Phase 3 (affiliate lifecycle, encrypted KYC, the `PaymentGateway` interface
+and its `MockPaymentGateway`, and the registration fee flow) deliberately
+built `activateFromVerifiedPayment` (`src/lib/affiliate/fee.ts`) to *re-read
+the payment row from the database and check its status, purpose, and
+affiliate linkage itself* before activating anything — this is verbatim
+mistake #7 from §9 of the original brief ("`activateFromVerifiedPayment`
+never read the payment row — it trusted the id despite its name"), and it
+was written defensively from the start rather than caught after the fact.
+`tests/affiliate-fee.test.ts` has a test named for exactly this: confirming
+a payment the mock gateway reports as `failed` must not activate the
+affiliate no matter how confirm is called — if the guard is ever removed,
+that test fails immediately.
+
+Two schema-level things worth calling out, neither a bug so much as a
+deliberate choice that test cleanup had to respect: `payments.affiliate_id`
+and `affiliate_kyc.reviewed_by_user_id` are plain foreign keys, not
+`ON DELETE CASCADE` — a payment or a KYC review decision is a financial/audit
+record that must survive even if the account referencing it is later
+removed. `tests/helpers.ts`'s `deleteTestUser` unwinds these explicitly
+(delete the affiliate's payments, null out any KYC rows this user reviewed,
+then delete the user) rather than relying on cascade, which is exactly what
+a real "close this account" admin action would also have to do.
+
+Also new in this phase: `src/lib/crypto/pii.ts` derives two independent
+subkeys (encryption, HMAC fingerprinting) from the single
+`PII_ENCRYPTION_KEY` via HKDF with a fixed, empty salt — deliberately
+deterministic (the same master key must always yield the same subkeys, or
+existing encrypted KYC data becomes unreadable), which is the opposite of
+HKDF's usual randomized-salt use case. Tested directly in `tests/pii.test.ts`,
+including that a tampered ciphertext fails GCM's auth tag check rather than
+silently decrypting to garbage.
+
+### A real infrastructure mistake this build made, found and fixed live
+
+The first version of the HTTP-level test suite had `tests/auth-routes.test.ts`
+and `tests/affiliate-routes.test.ts` each spawn their own `next dev` server
+on a different port in their own `beforeAll`. Running both together
+deadlocked the entire suite: **Next.js 16 refuses to run a second `next dev`
+against the same project directory at all**, regardless of port — it
+detects an existing instance via a `.next/dev/lock` file and either hands
+back the running one or hangs waiting on the lock. The symptom looked
+exactly like a real bug (tests timing out, a `next-server` process pinned
+at 80%+ CPU indefinitely) with no error surfaced until the *other* file's
+server startup finally logged `Another next dev server is already running`.
+
+Fixed by not doing that: `tests/global-setup.ts` builds the app once and
+starts a **single shared server** (`next start`, not `next dev` — no
+dev-mode file-watcher lock, and no lazy per-route compilation, so it's also
+faster) for the entire test run via Vitest's `globalSetup`, torn down once
+at the end. Every HTTP-level test file now points at that one server
+instead of spawning its own. This dropped the HTTP suites from
+multi-second-per-test (cold dev-mode compilation) to ~500ms for 9 tests
+combined, and eliminated the deadlock entirely — a good reminder that a
+"real running server" requirement doesn't mean *one per test file*.

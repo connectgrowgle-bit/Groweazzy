@@ -1,77 +1,26 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { afterAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { sessions, users } from '@/db/schema';
+import { TEST_SERVER_URL } from './global-setup';
 
-// These specifically hit a real running Next.js server over HTTP rather than
-// calling the route handler functions directly, because src/lib/auth/cookies.ts
-// uses next/headers' cookies() — which only works inside Next's own request
-// pipeline, not when a route handler is invoked as a plain function outside
-// it. This is also what the project brief's testing philosophy asks for:
-// "every suite runs against a real PostgreSQL and a real running server."
-const PORT = 3901;
-const BASE_URL = `http://localhost:${PORT}`;
+// Hits the single shared server started once in tests/global-setup.ts,
+// over real HTTP, rather than calling route handler functions directly —
+// required because src/lib/auth/cookies.ts uses next/headers, which only
+// works inside Next's own request pipeline. This is also what the project
+// brief's testing philosophy asks for: "every suite runs against a real
+// PostgreSQL and a real running server."
+const BASE_URL = TEST_SERVER_URL;
 
-let server: ChildProcess;
 const createdUserIds: string[] = [];
-
-function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const attempt = async () => {
-      try {
-        const res = await fetch(url);
-        if (res.ok) return resolve();
-      } catch {
-        // not up yet
-      }
-      if (Date.now() > deadline) return reject(new Error(`Server at ${url} did not become ready in time`));
-      setTimeout(attempt, 300);
-    };
-    attempt();
-  });
-}
 
 function extractCookieHeader(res: Response): string {
   const setCookies = res.headers.getSetCookie?.() ?? [];
   return setCookies.map((c) => c.split(';')[0]).join('; ');
 }
 
-beforeAll(async () => {
-  server = spawn('npx', ['next', 'dev', '--port', String(PORT)], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      APP_ENV: 'development',
-      APP_URL: BASE_URL,
-      DATABASE_SSL: 'false',
-      SESSION_SECRET: 'test-only-session-secret-at-least-32-characters',
-      PII_ENCRYPTION_KEY: '0'.repeat(64),
-      PAYMENT_PROVIDER: 'mock',
-      PAYMENT_MODE: 'test',
-      CRON_SECRET: 'test-only-cron-secret',
-      EMAIL_PROVIDER: 'console',
-      STORAGE_DRIVER: 'local',
-    },
-    stdio: 'pipe',
-  });
-
-  let stderr = '';
-  server.stderr?.on('data', (chunk) => {
-    stderr += String(chunk);
-  });
-
-  try {
-    await waitForServer(`${BASE_URL}/api/health`, 60000);
-  } catch (err) {
-    throw new Error(`${(err as Error).message}\nServer stderr:\n${stderr}`);
-  }
-}, 70000);
-
 afterAll(async () => {
-  server?.kill('SIGTERM');
   while (createdUserIds.length) {
     const id = createdUserIds.pop();
     if (id) await db.delete(users).where(eq(users.id, id));

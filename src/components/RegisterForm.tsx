@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { registerSchema } from '@/lib/auth/schemas';
 
-export function RegisterForm() {
+export function RegisterForm({ next }: { next?: string }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -37,7 +37,7 @@ export function RegisterForm() {
         setError(typeof body.error === 'string' ? body.error : 'Could not create account');
         return;
       }
-      router.push('/account');
+      router.push(next && next.startsWith('/') ? next : '/account');
       router.refresh();
     } catch {
       setError('Something went wrong — please try again.');

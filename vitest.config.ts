@@ -7,6 +7,7 @@ import path from 'node:path';
 export default defineConfig({
   test: {
     environment: 'node',
+    globalSetup: ['./tests/global-setup.ts'],
     setupFiles: ['./tests/setup.ts'],
     testTimeout: 15000,
     // Auth/session tests share tables under concurrent access (e.g. two
