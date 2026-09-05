@@ -41,6 +41,12 @@ async function deleteOrderAndAttribution(orderId: string) {
     await db.delete(commissionEntries).where(eq(commissionEntries.conversionId, conversion.id));
     await db.delete(affiliateConversions).where(eq(affiliateConversions.id, conversion.id));
   }
+  // payments.order_id is a plain FK (no ON DELETE CASCADE — a payment
+  // record must survive even if the order referencing it is later
+  // removed), same reasoning as payments.affiliate_id elsewhere in this
+  // file. Tests that create a SERVICE_ORDER payment against a test order
+  // (e.g. tests/razorpay-webhook.test.ts) need it cleared first.
+  await db.delete(payments).where(eq(payments.orderId, orderId));
   await db.delete(orders).where(eq(orders.id, orderId));
 }
 

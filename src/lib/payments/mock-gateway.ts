@@ -61,4 +61,15 @@ export class MockPaymentGateway implements PaymentGateway {
     });
     return { gatewayPaymentId };
   }
+
+  // Test/dev-only: stands in for Razorpay reporting a refund against an
+  // already-captured payment. Takes the new CUMULATIVE refunded total, not
+  // a delta — matching how fetchPaymentStatus()/amount_refunded works for
+  // real Razorpay, which is exactly what reverseConversionCommission's
+  // idempotency depends on (docs/ARCHITECTURE.md §6, §21).
+  async simulateRefund(gatewayPaymentId: string, cumulativeAmountRefundedPaise: number): Promise<void> {
+    const payment = this.payments.get(gatewayPaymentId);
+    if (!payment) throw new Error(`No such mock payment: ${gatewayPaymentId}`);
+    payment.amountRefundedPaise = cumulativeAmountRefundedPaise;
+  }
 }

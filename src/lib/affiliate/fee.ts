@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { affiliates, payments } from '@/db/schema';
 import { getPaymentGateway } from '@/lib/payments';
+import { verifyAndRecordPaymentStatus } from '@/lib/payments/confirm';
 import { getCurrentCommissionPolicy } from './commission-policy';
 import { transitionAffiliateStatus } from './lifecycle';
 
@@ -56,8 +57,10 @@ export class PaymentNotCapturedError extends Error {
 }
 
 // Confirms payment status the only way rule 6 allows: a server-to-server
-// fetch from the gateway, never the frontend's word. Records what the
-// gateway said either way; only proceeds to activation on a genuine capture.
+// fetch from the gateway, never the frontend's word (verifyAndRecordPaymentStatus,
+// shared with the Razorpay webhook handler — see src/lib/payments/confirm.ts).
+// Records what the gateway said either way; only proceeds to activation on
+// a genuine capture.
 export async function confirmAffiliateFeePayment(
   paymentId: string,
   gatewayPaymentId: string
@@ -68,20 +71,7 @@ export async function confirmAffiliateFeePayment(
     throw new Error(`Payment ${paymentId} is not an affiliate fee payment`);
   }
 
-  const gateway = getPaymentGateway();
-  const status = await gateway.fetchPaymentStatus(gatewayPaymentId);
-
-  const [updated] = await db
-    .update(payments)
-    .set({
-      status: status.status === 'captured' ? 'CAPTURED' : status.status === 'failed' ? 'FAILED' : 'AUTHORIZED',
-      razorpayPaymentId: gatewayPaymentId,
-      amountRefundedPaise: status.amountRefundedPaise,
-      updatedAt: new Date(),
-    })
-    .where(eq(payments.id, paymentId))
-    .returning();
-  if (!updated) throw new Error('Update did not return a row');
+  const updated = await verifyAndRecordPaymentStatus(paymentId, gatewayPaymentId);
 
   if (updated.status === 'CAPTURED') {
     await activateFromVerifiedPayment(paymentId);

@@ -532,3 +532,66 @@ delta-on-second-refund cases.
    with no error indicating *why*. Fixed by extracting them into
    `tests/test-env-constants.ts`, imported by both files — one source of
    truth for values that must be byte-identical across two OS processes.
+
+## 22. Phase 5: Razorpay
+
+`RazorpayGateway` (`src/lib/payments/razorpay-gateway.ts`) implements the
+same `PaymentGateway` interface `MockPaymentGateway` has satisfied since
+Phase 3 — `createOrder`/`fetchPaymentStatus` over Razorpay's REST API with
+Basic Auth, nothing above the interface changed. `getPaymentGateway()`
+(`src/lib/payments/index.ts`) picks between the two based on
+`PAYMENT_PROVIDER`, which is how `src/lib/affiliate/fee.ts`'s fee flow gets
+Razorpay for free without any of its own code changing.
+
+**This adapter and the webhook handler have not been exercised against a
+real Razorpay account** — this build environment has no network path to
+`api.razorpay.com`. `tests/razorpay-gateway.test.ts` tests it only against
+a contract fake (a mocked `fetch` returning the request/response shapes
+Razorpay's published API reference documents), and the webhook tests use
+synthetic, hand-constructed payloads following the same documented shapes.
+Treat exact field names (`amount_refunded`, the webhook's event-id
+location, etc.) as best-effort until Phase 13 ("real gateway
+verification... on a machine that can reach the provider") actually
+confirms them — that phase exists specifically to catch the gap between
+"matches the docs" and "matches what the live API actually sends."
+
+**Webhook handling** (`src/app/api/webhooks/razorpay/route.ts`):
+- Signature verified over the untouched raw body (`request.text()`, never
+  parsed before verifying — rule 7) via HMAC-SHA256 keyed on
+  `RAZORPAY_WEBHOOK_SECRET` (`src/lib/payments/webhook-signature.ts`),
+  constant-time compared.
+- **Idempotent inbox with a real retry story, not just replay protection.**
+  A webhook row is inserted with `processedAt: null` before any processing
+  starts. A delivery whose row already has `processedAt` set is a true
+  replay — 200, no-op (rule 9). A delivery whose row exists but
+  `processedAt` is still `null` means a *previous attempt at this exact
+  event* crashed or errored mid-processing — this is deliberately
+  reprocessed rather than treated as "already handled," because every
+  handler downstream is itself idempotent (`verifyAndRecordPaymentStatus`
+  re-records the same status; `reverseConversionCommission` computes its
+  delta fresh from the ledger; re-activating an already-`ACTIVE` affiliate
+  is a no-op transition). A processing error leaves `processedAt` null and
+  returns 500 so Razorpay's own retry (or a manual replay) tries again,
+  rather than silently swallowing a failure as a false "handled."
+- `verifyAndRecordPaymentStatus` (`src/lib/payments/confirm.ts`) is
+  extracted out of what was Phase 3's `confirmAffiliateFeePayment` so the
+  webhook and the manual `/api/affiliate/fee/confirm` flow share the exact
+  same "ask the gateway, don't trust the payload" logic — the webhook calls
+  `confirmAffiliateFeePayment` directly for `AFFILIATE_FEE` payments (one
+  more, harmless idempotent gateway read) and a new, parallel
+  `handleServiceOrderPaymentCaptured`/`handleServiceOrderPaymentRefund`
+  (`src/lib/payments/order-webhooks.ts`) for `SERVICE_ORDER` ones: mark the
+  order `PAID` (only from `AWAITING_PAYMENT`, never regressing a stage a
+  fuller Phase 6 state machine has already moved past) and approve the
+  PENDING commission entry riding on it — a payment actually capturing is
+  what turns a tentative commission into one backed by real money.
+- `refund.processed` always re-fetches the payment's status from the
+  gateway rather than trusting whatever refund amount is in the webhook
+  payload, specifically so `reverseConversionCommission`'s cumulative-not-
+  incremental contract (§6, §21) holds no matter what shape a specific
+  refund event's payload turns out to have.
+
+D-1 from §13 (no Razorpay Route/split settlement — collect and disburse
+separately) is upheld by construction here: nothing in this phase creates
+a linked account or splits a payment at capture time; `createOrder` only
+ever creates a plain order for the full amount.

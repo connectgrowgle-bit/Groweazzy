@@ -1,9 +1,11 @@
 import { getEnv } from '@/lib/env';
 import type { PaymentGateway } from './gateway';
 import { MockPaymentGateway } from './mock-gateway';
+import { RazorpayGateway } from './razorpay-gateway';
 
 export type { PaymentGateway, CreateOrderParams, CreateOrderResult, PaymentStatusResult } from './gateway';
 export { MockPaymentGateway } from './mock-gateway';
+export { RazorpayGateway } from './razorpay-gateway';
 
 let singleton: PaymentGateway | null = null;
 
@@ -19,7 +21,10 @@ export function getPaymentGateway(): PaymentGateway {
     return singleton;
   }
 
-  // Phase 5 implements a RazorpayGateway class satisfying the same
-  // PaymentGateway interface — nothing above this function changes then.
-  throw new Error(`PAYMENT_PROVIDER=${env.PAYMENT_PROVIDER} has no gateway implementation yet (lands in Phase 5)`);
+  // env.ts's superRefine already guarantees RAZORPAY_KEY_ID/SECRET are set
+  // and cross-checked against PAYMENT_MODE whenever PAYMENT_PROVIDER is
+  // 'razorpay' — the non-null assertions here are backed by that, not a
+  // fresh assumption made in this file.
+  singleton = new RazorpayGateway(env.RAZORPAY_KEY_ID!, env.RAZORPAY_KEY_SECRET!);
+  return singleton;
 }

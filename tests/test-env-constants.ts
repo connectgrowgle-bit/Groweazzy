@@ -12,4 +12,10 @@ export const SHARED_TEST_ENV = {
   SESSION_SECRET: 'test-only-session-secret-shared-across-both-test-processes',
   PII_ENCRYPTION_KEY: '0'.repeat(64), // 32 bytes hex, as src/lib/env.ts requires
   CRON_SECRET: 'test-only-cron-secret',
+  // Set even though PAYMENT_PROVIDER=mock in tests (so env.ts's
+  // razorpay-only cross-checks don't apply) — the webhook route verifies
+  // signatures against this regardless of which gateway is "active" for
+  // outbound calls, so tests/razorpay-webhook.test.ts needs a real value
+  // to sign against.
+  RAZORPAY_WEBHOOK_SECRET: 'test-only-razorpay-webhook-secret',
 };

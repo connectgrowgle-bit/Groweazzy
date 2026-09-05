@@ -26,8 +26,19 @@ decisions still open.
   append-only commission ledger with the CANCELLED-vs-REVERSED distinction
   (§6), proportional and idempotent refund reversal, and the rate locked
   into each entry at creation time.
+- **Phase 5 (Razorpay)** — done. `RazorpayGateway` implements the same
+  `PaymentGateway` interface `MockPaymentGateway` does — nothing above that
+  interface changed. Webhook handler verifies signatures over the raw body,
+  has an idempotent inbox (a replayed delivery is a no-op; a delivery that
+  crashed mid-processing is retried, not silently dropped), and routes
+  `payment.captured`/`payment.failed`/`refund.processed` to the affiliate
+  fee flow or the order/commission flow as appropriate. **Not yet verified
+  against a real Razorpay account** — this environment has no network path
+  to `api.razorpay.com`, so it's tested only against a contract fake; see
+  the caveat in `src/lib/payments/razorpay-gateway.ts` and Phase 13 in the
+  project brief.
 
-Not yet built: real payments (Razorpay), client workflow, CRM, training,
+Not yet built: client workflow (real checkout/orders), CRM, training,
 admin dashboard, the commission scheduler, and the security audit. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
@@ -101,7 +112,7 @@ src/lib/auth/     password, session, cookies, rbac, actor guard, permission cata
 src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
 src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
-src/lib/payments/ PaymentGateway interface + MockPaymentGateway
+src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
 src/lib/          repository.ts (content seam), env.ts (startup validation), db-errors.ts
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
