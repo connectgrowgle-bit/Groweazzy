@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { loginSchema } from '@/lib/auth/schemas';
+import { safeInternalPath } from '@/lib/safe-redirect';
 
 export function LoginForm({ next }: { next?: string }) {
   const router = useRouter();
@@ -33,7 +34,7 @@ export function LoginForm({ next }: { next?: string }) {
         setError(typeof body.error === 'string' ? body.error : 'Invalid email or password');
         return;
       }
-      router.push(next && next.startsWith('/') ? next : '/account');
+      router.push(safeInternalPath(next, '/account'));
       router.refresh();
     } catch {
       setError('Something went wrong — please try again.');

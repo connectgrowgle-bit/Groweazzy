@@ -6,13 +6,32 @@ import { createSession } from '@/lib/auth/session';
 import { setSessionCookie } from '@/lib/auth/cookies';
 import { logAudit } from '@/lib/auth/audit';
 import { isUniqueViolation } from '@/lib/db-errors';
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit';
+import { getClientIp } from '@/lib/net';
 
 // Registration is a plain customer account — no role is assigned here.
 // Ownership-based access (a user sees their own orders) doesn't need RBAC;
 // permissions (src/lib/auth/rbac.ts) exist for staff/admin capabilities and
 // are granted separately (scripts/seed/roles-permissions.ts, or an admin
 // action once Phase 9 ships user.suspend/role.manage UI).
+//
+// Deliberate, scoped exception to rule 14's "account enumeration is
+// closed": the 409 below DOES reveal that an email is already registered.
+// Login stays hardened (generic error, timing-safe, rate-limited) because
+// that's the higher-value target for credential stuffing; here, telling a
+// genuine user "you already have an account, log in instead" is real UX
+// value with no email-sending flow built to route around it instead
+// (docs/ARCHITECTURE.md §27) — not an oversight of the same principle,
+// a considered trade-off on a lower-stakes endpoint.
+const IP_LIMIT = { maxAttempts: 10, windowSeconds: 60 * 60 };
+
 export async function POST(request: Request) {
+  const trustedIp = getClientIp(request);
+  if (trustedIp) {
+    const ipLimit = await checkRateLimit(`register:ip:${trustedIp}`, IP_LIMIT);
+    if (!ipLimit.allowed) return rateLimitedResponse(ipLimit.retryAfterSeconds!);
+  }
+
   const body = await request.json().catch(() => null);
   const parsed = registerSchema.safeParse(body);
   if (!parsed.success) {

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { registerSchema } from '@/lib/auth/schemas';
+import { safeInternalPath } from '@/lib/safe-redirect';
 
 export function RegisterForm({ next }: { next?: string }) {
   const router = useRouter();
@@ -37,7 +38,7 @@ export function RegisterForm({ next }: { next?: string }) {
         setError(typeof body.error === 'string' ? body.error : 'Could not create account');
         return;
       }
-      router.push(next && next.startsWith('/') ? next : '/account');
+      router.push(safeInternalPath(next, '/account'));
       router.refresh();
     } catch {
       setError('Something went wrong — please try again.');

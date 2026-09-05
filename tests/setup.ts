@@ -35,6 +35,10 @@ const TEST_ENV_DEFAULTS: Record<string, string> = {
   PAYMENT_MODE: 'test',
   EMAIL_PROVIDER: 'console',
   STORAGE_DRIVER: 'local',
+  // Set here only, not in SHARED_TEST_ENV — see that file's own comment on
+  // why this one value is deliberately allowed to differ from the spawned
+  // HTTP test server's env.
+  TRUSTED_PROXY_HEADER: 'x-forwarded-for',
 };
 
 for (const [key, value] of Object.entries(TEST_ENV_DEFAULTS)) {

@@ -84,9 +84,28 @@ decisions still open.
   source rows on every request — nothing cached. See
   [`docs/ARCHITECTURE.md` §26](docs/ARCHITECTURE.md#26-phase-9-admin-dashboard).
 
+- **Phase 10 (Security audit)** — done. Manual audit across the whole
+  codebase; every protected route confirmed to gate via
+  `requireActor`/`requirePermission`, every public route confirmed to gate
+  itself internally. Real findings fixed: two exploitable open redirects
+  (client-side in the login/register forms, and a serious server-side one
+  in the public `/api/attribution/click`, both closed via
+  `src/lib/safe-redirect.ts`); no brute-force protection on
+  login/register/contact (added a DB-backed rate limiter,
+  `src/lib/rate-limit.ts`, with a real concurrency bug in its own first
+  draft caught and fixed before shipping); client IP trusted only when an
+  operator explicitly configures `TRUSTED_PROXY_HEADER`
+  (`src/lib/net.ts`, fail-closed by default); Argon2 opportunistic rehash
+  wired up (existed since Phase 2, was never called); new
+  `Strict-Transport-Security`/`Permissions-Policy` headers; a stale
+  middleware protected-prefix list, and a sharper prefix-matching bug that
+  list fix surfaced. See
+  [`docs/ARCHITECTURE.md` §27](docs/ARCHITECTURE.md#27-phase-10-security-audit)
+  for the full writeup, including what was deliberately left as an
+  accepted trade-off rather than "fixed."
+
 Not yet built: user management/audit-log/payouts/settings screens (the
-permissions exist, Phase 2; no UI yet), the commission scheduler, and the
-security audit. See
+permissions exist, Phase 2; no UI yet), and the commission scheduler. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -172,7 +191,7 @@ src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authori
 src/lib/admin/    live (uncached) revenue + affiliate-performance reporting
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
-src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts
+src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts, net.ts (fail-closed trusted-proxy client IP), rate-limit.ts (DB-backed fixed-window limiter), safe-redirect.ts (open-redirect-safe `next` handling)
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express

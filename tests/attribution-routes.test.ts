@@ -71,4 +71,30 @@ describe('attribution routes (real server, real Postgres)', () => {
     const res = await fetch(`${BASE_URL}/pricing`, { redirect: 'manual' });
     expect(res.status).toBe(200);
   });
+
+  // This route is independently, publicly reachable (not only middleware
+  // can call it) — a `next` crafted to look like an absolute external URL
+  // must never survive into the redirect target (docs/ARCHITECTURE.md
+  // §27: this was a real, exploitable open redirect, not a defensive
+  // nicety — new URL(next, origin) returns the OTHER origin verbatim when
+  // `next` already looks absolute, silently ignoring the base).
+  it('a `next` crafted as an absolute external URL is not followed — redirects to "/" instead', async () => {
+    const res = await fetch(`${BASE_URL}/api/attribution/click?next=https%3A%2F%2Fevil.example%2Fphish`, {
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(307);
+    const location = new URL(res.headers.get('location')!, BASE_URL);
+    expect(location.origin).toBe(BASE_URL);
+    expect(location.pathname).toBe('/');
+  });
+
+  it('a `next` crafted as a protocol-relative URL ("//host") is not followed either', async () => {
+    const res = await fetch(`${BASE_URL}/api/attribution/click?next=%2F%2Fevil.example%2Fphish`, {
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(307);
+    const location = new URL(res.headers.get('location')!, BASE_URL);
+    expect(location.origin).toBe(BASE_URL);
+    expect(location.pathname).toBe('/');
+  });
 });

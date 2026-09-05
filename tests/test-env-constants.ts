@@ -19,3 +19,22 @@ export const SHARED_TEST_ENV = {
   // to sign against.
   RAZORPAY_WEBHOOK_SECRET: 'test-only-razorpay-webhook-secret',
 };
+
+// Deliberately NOT here, unlike everything above: TRUSTED_PROXY_HEADER
+// (src/lib/net.ts) has no cross-process cryptographic agreement to keep —
+// nothing signs with it — so there's no correctness reason to force it
+// identical on both sides. tests/setup.ts sets it (so a direct,
+// in-process call to getClientIp() in a unit test, e.g. tests/net.test.ts,
+// exercises the real "configured" code path) but tests/global-setup.ts's
+// spawned server deliberately does NOT: this sandbox's loopback HTTP
+// connections arrive with `x-forwarded-for: 127.0.0.1` already populated
+// (apparently stamped by something upstream of Node here, not sent by the
+// test client), so configuring the SAME header name as trusted on the
+// live test server would make every HTTP-level test's request look like
+// it came from one shared "client" — collapsing dozens of unrelated
+// tests' registrations onto one IP-keyed rate-limit bucket and failing
+// them with 429s that have nothing to do with what each test is actually
+// checking. A real deployment's operator points TRUSTED_PROXY_HEADER at
+// whatever header THEIR actual reverse proxy sets — this is a sandbox
+// quirk of testing without one, not a reason to weaken the setting itself.
+

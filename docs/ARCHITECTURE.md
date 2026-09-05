@@ -981,3 +981,142 @@ console, or a settings screen — `user.view`/`user.suspend`, `audit.view`,
 `payout.*`, and `settings.*` are all real permissions already seeded
 (Phase 2), waiting for screens that weren't this phase's stated job to
 build.
+
+## 27. Phase 10: Security audit
+
+No new feature landed this phase — instead, a systematic manual audit of
+everything shipped in Phases 0–9, with real findings fixed and tested, not
+just written up. Every route's auth gating was inventoried first
+(`requireActor`/`requirePermission` on every protected route; the public
+routes — health, ready, webhooks, `dev/mock-payment`, `attribution/click`,
+`auth/*`, `contact` — each gate themselves internally where it matters,
+e.g. `dev/mock-payment` on `PAYMENT_PROVIDER=mock` plus non-production).
+Money, crypto, session, and webhook-signature code (§§2–9) held up with no
+findings. What follows is what didn't.
+
+**Two real, exploitable open redirects.** The client-side one
+(`LoginForm`/`RegisterForm` doing `next.startsWith('/') ? next : '/account'`)
+was a minor phishing vector at best — a crafted `//evil.com` string passes
+`startsWith('/')` and the browser treats it as protocol-relative. The
+server-side one, in the publicly reachable `GET /api/attribution/click`,
+was the serious one: `new URL(next, url.origin)` returns `next` verbatim
+whenever it already looks absolute — the `base` argument is only a
+fallback, never a constraint — so `?next=https://evil.com` bypassed the
+same-origin assumption entirely, no cookie or session required to trigger
+it. Both now go through a single `src/lib/safe-redirect.ts::safeInternalPath`,
+which rejects anything not starting with a bare `/`, plus the `//` and
+`/\` protocol-relative bypasses specifically. Covered by
+`tests/safe-redirect.test.ts` (unit) and two new cases in
+`tests/attribution-routes.test.ts` (HTTP-level, absolute and
+protocol-relative `next`).
+
+**Brute-force protection was entirely missing.** Login, register, and
+contact had no attempt limiting at all. Added a DB-backed fixed-window
+limiter (`rate_limit_buckets` table, `src/lib/rate-limit.ts`'s
+`checkRateLimit`/`rateLimitedResponse`) — chosen over an in-memory map
+because this app already assumes multiple server instances behind a load
+balancer (no shared process memory to count against). Login limits by
+email (always) and by IP (only when a trusted proxy header is configured,
+see below); register and contact limit by IP only. A blocked request gets
+`429` with a `Retry-After` header.
+
+*A concurrency bug caught before it shipped:* the first version did
+`SELECT ... FOR UPDATE` before deciding whether to insert a fresh window —
+but `FOR UPDATE` on a row that doesn't exist yet locks nothing, so N
+concurrent first-hits on a brand-new key could all see "no row" and each
+take the "fresh window, count=1" branch, letting a burst through well past
+`maxAttempts`. Fixed by always doing `INSERT ... ON CONFLICT DO NOTHING`
+first (guaranteeing a real, lockable row exists even on the very first
+hit) before the guarded `SELECT ... FOR UPDATE` read. `tests/rate-limit.test.ts`
+proves it directly: 10 concurrent calls with `maxAttempts=5` allows
+exactly 5.
+
+**Client IP, trusted only when explicitly configured.** Rate limiting by
+IP needs a client IP, and the only place one arrives from is a header set
+by whatever reverse proxy sits in front of the app — which this codebase
+cannot assume exists, let alone which header it uses. `src/lib/net.ts`'s
+`getClientIp` returns `null` unless the operator has set
+`TRUSTED_PROXY_HEADER` to the exact header name their real proxy sets;
+with nothing configured, no inbound header is ever trusted for this
+purpose, so a client can't spoof its way around IP-based limiting by
+sending a fake `x-forwarded-for` — the value is simply never read. This
+fail-closed default had a direct test-infrastructure consequence: this
+sandbox's own loopback connections arrive with `x-forwarded-for:
+127.0.0.1` already stamped on them by something upstream of Node,
+regardless of what the test client sends. Configuring the *same* header
+name as trusted on the shared HTTP test server (`tests/global-setup.ts`)
+made every unrelated test's request look like it came from one client,
+collapsing dozens of registrations onto a single IP bucket and failing
+them with unrelated 429s. Fixed by keeping `TRUSTED_PROXY_HEADER` out of
+`tests/test-env-constants.ts::SHARED_TEST_ENV` (the spawned server never
+trusts it, matching a real fresh deployment with no reverse proxy set up
+yet) and setting it only in `tests/setup.ts`'s own vitest-process env (so
+direct, in-process unit tests like `tests/net.test.ts` still exercise the
+"configured" code path). `tests/auth-security.test.ts` now asserts the
+property this actually protects: a spoofed header has zero effect —
+no rate-limit bucket row is ever created for it — when no trusted proxy is
+configured.
+
+**Argon2 opportunistic rehash was dead code.** `needsRehash()` existed
+since Phase 2 but nothing ever called it. Login now checks it after a
+successful password verify and rewrites the stored hash under current
+parameters if it's stale, so a future parameter bump (memory/time cost)
+propagates to real users the next time they log in, with no forced
+password reset. `tests/auth-security.test.ts` proves both directions: a
+deliberately weak hash gets upgraded (and the new hash still verifies the
+same password), and an already-current hash is left untouched.
+
+**Security headers filled in.** `next.config.ts` gained
+`Strict-Transport-Security`, `Permissions-Policy`, and
+`poweredByHeader: false`; CSP, `X-Frame-Options`, `X-Content-Type-Options`,
+and `Referrer-Policy` were already in place from the original scaffold.
+
+**Middleware's protected-prefix list was stale**, still only listing
+`/account`/`/affiliate/dashboard` from early phases — `/orders`, `/crm`,
+`/training`, and `/admin` had shipped since without an entry, so an
+anonymous visitor hitting them got a page render (and that page's own
+`getActor()` redirect) instead of the immediate middleware redirect. Fixed
+the list; per §4 rule 11 this is a UX fix only, never a security one,
+since the per-page server-side check is the real boundary regardless of
+what's listed here. `/checkout` is deliberately still excluded — it sends
+anonymous visitors to `/register`, not `/login`, and middleware would race
+that with its own redirect.
+
+Fixing that list surfaced a second, sharper bug in the matching itself:
+`pathname.startsWith(prefix)` matches more than the intended prefix — a
+public catalogue page whose admin-authored slug happens to start the same
+way (e.g. `/admin-live-test-…`, rendered by the public `/[slug]` route)
+was being swept up by the `/admin` entry and redirected to login, purely
+because the strings share a prefix. `tests/admin-routes.test.ts` caught
+this immediately (a freshly created, active service redirecting to login
+instead of rendering). Fixed by requiring an exact segment match
+(`pathname === prefix || pathname.startsWith(`${prefix}/`)`) instead of a
+raw string-prefix test.
+
+**Accepted, not fixed — documented instead of silently skipped:**
+- `npm audit`: 0 vulnerabilities in production dependencies; 4 moderate
+  findings are all dev-only (esbuild, pulled in transitively by
+  `drizzle-kit`) and fixing them requires a breaking `drizzle-kit`
+  upgrade — accepted as low-risk since esbuild's dev-server flaw has no
+  bearing on this app's runtime or CI.
+- Register still reveals whether an email is already registered (a 409
+  vs. 201, no timing-safe enumeration protection like login has). This is
+  a deliberate, real UX trade-off (a user needs to know their signup
+  didn't happen because they already have an account), not an oversight —
+  login stays the hardened target since it's the one endpoint where
+  enumeration meaningfully assists a credential-stuffing attack.
+- `longDescriptionHtml` is stored and returned by the admin API but not
+  yet rendered on any public page, so there's no live XSS vector today;
+  sanitizing/rendering it is scoped to whichever future phase actually
+  displays it.
+- CSP still carries `unsafe-inline`, already called out in §15 as a
+  tracked Phase 12 gap, not new to this audit.
+- No separate CSRF token layer — `SameSite=Lax` plus `httpOnly` session
+  cookies is judged an acceptable modern baseline for a same-origin JSON
+  API; revisit if a cross-site form-post-triggering flow is ever added.
+
+New DB object: `rate_limit_buckets` (migration `0003_flaky_misty_knight.sql`).
+New library files: `src/lib/net.ts`, `src/lib/rate-limit.ts`,
+`src/lib/safe-redirect.ts`. New test files: `tests/rate-limit.test.ts`,
+`tests/safe-redirect.test.ts`, `tests/net.test.ts`,
+`tests/auth-security.test.ts`.

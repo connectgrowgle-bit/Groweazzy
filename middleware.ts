@@ -11,7 +11,15 @@ import { SESSION_COOKIE_NAME } from '@/lib/auth/cookies';
 // it); deleting this file must not make anything more accessible — verify
 // that by checking that every route under `PROTECTED_PREFIXES` also calls
 // getActor()/requireActor()/requirePermission() server-side.
-const PROTECTED_PREFIXES = ['/account', '/affiliate/dashboard'];
+// Kept in sync by hand, not derived — a stale entry here is a UX
+// regression (one extra render before a page's own getActor() redirect
+// fires), never a security one, since that per-page check is the actual
+// boundary regardless of what's listed here (docs/ARCHITECTURE.md §27).
+// `/checkout` is deliberately NOT here: its own page sends an anonymous
+// visitor to /register (carrying `plan` through registration), not
+// /login — this middleware only knows how to redirect to /login, which
+// would race and override that more specific, intentional destination.
+const PROTECTED_PREFIXES = ['/account', '/affiliate/dashboard', '/orders', '/crm', '/training', '/admin'];
 
 export function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
@@ -36,7 +44,16 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(clickUrl);
   }
 
-  const isProtected = PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  // Exact segment match only — plain `pathname.startsWith(prefix)` would
+  // also sweep up an unrelated public page whose slug merely starts with
+  // the same characters (e.g. a catalogue service slugged
+  // "admin-live-test", rendered by the public `/[slug]` route, must not
+  // be treated as living under `/admin` just because the string happens
+  // to start the same way — found by tests/admin-routes.test.ts during
+  // the Phase 10 security audit).
+  const isProtected = PROTECTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
   if (isProtected) {
     const hasCookie = request.cookies.has(SESSION_COOKIE_NAME);
     if (!hasCookie) {

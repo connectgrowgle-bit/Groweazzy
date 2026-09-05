@@ -180,3 +180,18 @@ export const jobRuns = pgTable('job_runs', {
 }, (t) => ({
   jobNameIdx: index('job_runs_job_name_idx').on(t.jobName),
 }));
+
+// Fixed-window brute-force/abuse throttling (docs/ARCHITECTURE.md §27) —
+// DB-backed rather than in-memory, on purpose: this app is meant to run as
+// more than one instance eventually (see D-10's "avoids a rewrite when
+// moving off a single server" reasoning, applied here to the same
+// single-process-memory trap), and a durable table is what makes the limit
+// actually hold across instances/restarts instead of resetting itself.
+// `key` is the caller's own composite string (e.g. "login:email:foo@bar.com"
+// or "login:ip:1.2.3.4") — this table has no opinion on what's being
+// limited, only how many hits landed inside the current window.
+export const rateLimitBuckets = pgTable('rate_limit_buckets', {
+  key: varchar('key', { length: 300 }).primaryKey(),
+  count: integer('count').notNull().default(0),
+  windowStartAt: timestamp('window_start_at', { withTimezone: true }).notNull().defaultNow(),
+});
