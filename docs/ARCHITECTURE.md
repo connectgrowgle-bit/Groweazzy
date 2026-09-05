@@ -595,3 +595,128 @@ D-1 from §13 (no Razorpay Route/split settlement — collect and disburse
 separately) is upheld by construction here: nothing in this phase creates
 a linked account or splits a payment at capture time; `createOrder` only
 ever creates a plain order for the full amount.
+
+## 23. Phase 6: Client workflow
+
+Builds the real version of §8's chain end to end:
+
+```
+Service → checkout → payment → verification → order → CRM contact →
+onboarding → meeting → requirements locked → team assigned → work →
+review → delivery → completion
+```
+
+**Catalogue bridge, not a Phase 9 jump.** `orders.service_plan_id` needs a
+real `service_plans` row to reference, but the catalogue itself is still
+Phase 1's static `src/lib/repository.ts` — Phase 9 is what formally moves
+it into the database. `scripts/seed/catalogue.ts` (core logic in
+`seedCatalogueFromRepository`, `src/lib/catalogue.ts`, same split as
+`db:seed:roles`/`seedRolesAndPermissions`) upserts a real `services`/
+`service_plans` row per static entry, keyed on `slug` and a new
+`service_plans_service_name_uidx` unique index on `(service_id, name)` —
+the only schema change this phase needed. `resolveServicePlan(staticPlanId)`
+looks a static plan id (e.g. `"aca-standard"`) up by that `(service slug,
+plan name)` pair to find its real row — never by array position or a
+freshly-generated id, neither of which survives a reseed. Price is
+re-synced from `repository.ts` on every seed run, so pre-Phase-9 a price
+change there and a redeploy is still all it takes.
+
+**Checkout → payment → verification** (`src/lib/orders/checkout.ts`,
+`POST /api/orders/checkout`, `POST /api/orders/[id]/confirm`) follows
+Phase 3's affiliate-fee shape exactly: an order (`AWAITING_PAYMENT`) and its
+payment row are created before any client checkout opens, price is read
+server-side via `resolveServicePlan` (rule 4, the client sends only a plan
+id), and confirmation calls the same `verifyAndRecordPaymentStatus` the
+Razorpay webhook uses — a server-to-server gateway fetch, never the
+request body's word for it (rule 6). Attribution is resolved and
+`recordConversion`-ed at checkout time, same call site the function's own
+Phase 4 doc comment named in advance.
+
+**Order → CRM contact, done inside payment capture, not as a separate
+step.** `handleServiceOrderPaymentCaptured` (`src/lib/payments/order-webhooks.ts`,
+shared by the webhook and the manual confirm route) now does three things
+instead of one, all only from `AWAITING_PAYMENT` so a replay is a no-op on
+all three: transitions `PAID`, transitions straight on into `ONBOARDING`
+(there is no manual step between a captured payment and the client seeing
+their onboarding form), and calls `upsertContactForOrder`
+(`src/lib/crm/contacts.ts`) — deduped by email, backfilling `userId` onto a
+contact that predates the account (e.g. a lead-form row). Full CRM
+self-population from every LATER stage transition, plus the dashboard/task
+tooling around it (§9), stays Phase 7's job on purpose — this phase's CRM
+footprint stops at "the contact exists and this order is on its timeline."
+
+**Onboarding: one shared Zod module, two schemas, never a duplicated
+shape.** `src/lib/onboarding-schemas.ts` defines each service's field set
+once and derives both a `submit` schema (`z.object(fields).strict()`) and a
+`draft` schema (the same object, `.partial()`) from it — a second,
+independently-maintained "what's actually required" shape is exactly how a
+draft and a submission drift apart. The module has no server-only imports,
+so `src/components/OrderWorkspace.tsx` renders each service's form
+straight from the same field list (as presentation metadata,
+`getOnboardingFieldSpecs` — never used for validation, which stays
+server-side only). `saveOnboardingDraft`/`submitOnboarding`
+(`src/lib/orders/onboarding.ts`) both refuse to write once
+`orders.requirements_locked_at` is set, and — the rule stated explicitly in
+the brief — **submitting does not lock requirements**; the kickoff call
+still happens in between, and a client can submit again after that call
+surfaces a correction, right up until an explicit lock.
+
+**Meeting scheduling and the lock are staff actions on existing
+permissions** — `meeting.schedule` and `order.update_stage`, both already
+in STAFF's default role since Phase 2, nothing new added to the
+catalogue. `scheduleMeeting` (`src/lib/orders/meetings.ts`) only advances
+`ONBOARDING → MEETING_SCHEDULED` the first time; a second meeting on an
+order already past that stage is just another row, not a repeated
+lifecycle event. `lockRequirements` (`src/lib/orders/lock.ts`) is the
+explicit, one-way action the brief calls out by name — it refuses to lock a
+submission that's still only a draft (`OnboardingNotSubmittedError`), and
+there being no transition back out of `REQUIREMENTS_LOCKED` is enforced by
+`transitionOrderStage`'s own `ALLOWED_TRANSITIONS` map (§5's pattern,
+reused verbatim as `src/lib/orders/lifecycle.ts`), not repeated here.
+
+**Cancel is intentionally narrow about commission.** `POST
+/api/orders/[id]/cancel` (owner, or staff with `order.cancel`) transitions
+to `CANCELLED` from any non-terminal stage, but only calls
+`cancelConversionCommission` when the order was still `AWAITING_PAYMENT` —
+past that point, payment capture has already moved the riding commission
+entry to `APPROVED`, and `cancelConversionCommission` only ever touches a
+`PENDING` one (§6). Cancelling an order that already collected payment does
+not silently erase that commission; unwinding it, if it's ever unwound,
+goes through the same refund webhook path (`reverseConversionCommission`)
+as any other refund — CANCELLED and REVERSED stay the two different ideas
+§6 already established, not two names for the same code path.
+
+**Real Razorpay Checkout.js (the customer-facing widget) is deferred
+alongside Phase 13**, for the same reason the server-side adapter is: this
+sandbox has no network path to `checkout.razorpay.com` any more than
+`api.razorpay.com`. Until then, `src/components/CheckoutFlow.tsx` drives
+the same `PAYMENT_PROVIDER=mock` dev-simulation endpoint
+(`/api/dev/mock-payment`) the affiliate fee flow already uses — swapping in
+the real widget is a frontend-only change; none of the server-side
+checkout/confirm plumbing behind it moves.
+
+**Three real bugs caught by the test suite before anything shipped on
+them**, same discipline as §19-§22:
+1. `upsertContactForOrder`'s userId-backfill branch updated the database
+   row but returned the stale in-memory `contact` object (still
+   `userId: null`) — caught by
+   `tests/crm-contacts.test.ts`'s backfill test, fixed by capturing
+   `.returning()`'s result instead of assuming the update mutated the
+   local variable.
+2. `tests/helpers.ts`'s `deleteTestUser` didn't know about two new
+   plain (non-cascading) FKs this phase's tables added referencing
+   `users.id` by actor — `meetings.scheduled_by_user_id` and
+   `order_events.actor_user_id`. A STAFF fixture that scheduled a meeting
+   or locked requirements on a DIFFERENT test user's order left rows
+   pointing at itself, and deleting that staff user failed with a foreign
+   key violation on cleanup — not a bug in the app, but exactly the kind of
+   test-harness gap this phase's own `tests/order-routes.test.ts` was
+   the first to actually exercise (same shape as the `affiliate_kyc.reviewed_by_user_id`
+   gap found in Phase 2/3). Fixed by nulling both columns before deleting
+   the user, same pattern as the existing KYC-reviewer case.
+3. Extending payment capture to auto-advance `PAID → ONBOARDING` broke an
+   existing Phase 5 webhook test's assertion that the order stayed at
+   `PAID` — not a regression so much as that test encoding a stage value
+   that stopped being the final word the moment this phase's chain landed.
+   Updated the assertion (and added CRM-contact coverage to the same test)
+   rather than treating it as a false alarm to silence.

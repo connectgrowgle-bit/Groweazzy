@@ -13,6 +13,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed:roles": "tsx scripts/seed/roles-permissions.ts",
+    "db:seed:catalogue": "tsx scripts/seed/catalogue.ts",
     "test": "vitest run"
   },
   "dependencies": {

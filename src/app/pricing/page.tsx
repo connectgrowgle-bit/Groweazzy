@@ -30,7 +30,7 @@ export default async function PricingPage() {
                 ))}
               </ul>
               <Link
-                href={`/register?plan=${service.plans[0]?.id}`}
+                href={`/checkout?plan=${service.plans[0]?.id}`}
                 className="mt-6 rounded-md bg-brand px-4 py-2 text-center font-medium text-white hover:opacity-90"
               >
                 Get started

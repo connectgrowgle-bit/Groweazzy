@@ -5,11 +5,11 @@ import { RegisterForm } from '@/components/RegisterForm';
 export const metadata = { title: 'Register — GrowEazzy' };
 
 // `plan` / `as` query params (from service pages and /affiliate) are read
-// here for informational display only. Registration always creates a plain
-// customer account (src/app/api/auth/register/route.ts) — starting checkout
-// for a plan is still Phase 6, but affiliate signup (KYC, fee payment) is
-// live as of Phase 3: `as=affiliate` sends the visitor straight to the
-// affiliate dashboard to continue there after their account is created.
+// here to decide where account creation continues to. Registration always
+// creates a plain customer account (src/app/api/auth/register/route.ts):
+// `as=affiliate` sends the visitor straight to the affiliate dashboard to
+// continue there (KYC, fee payment), and `plan` (Phase 6) sends them
+// straight into checkout for that plan.
 export default async function RegisterPage({
   searchParams,
 }: {
@@ -17,7 +17,7 @@ export default async function RegisterPage({
 }) {
   const { plan, as } = await searchParams;
   const isAffiliateSignup = as === 'affiliate';
-  const next = isAffiliateSignup ? '/affiliate/dashboard' : undefined;
+  const next = isAffiliateSignup ? '/affiliate/dashboard' : plan ? `/checkout?plan=${plan}` : undefined;
 
   return (
     <PageShell>
@@ -31,7 +31,7 @@ export default async function RegisterPage({
         )}
         {plan && !isAffiliateSignup && (
           <p className="mt-1 text-sm text-gray-500">
-            Selected plan: {plan}. Checkout isn&apos;t live yet — this creates your account first.
+            Selected plan: {plan}. We&apos;ll take you straight to checkout after your account is created.
           </p>
         )}
         <RegisterForm next={next} />

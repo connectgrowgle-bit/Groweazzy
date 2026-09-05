@@ -6,6 +6,9 @@ import {
   affiliateKyc,
   affiliates,
   commissionEntries,
+  crmContacts,
+  meetings,
+  orderEvents,
   orders,
   payments,
   servicePlans,
@@ -66,11 +69,25 @@ export async function deleteTestUser(userId: string) {
   // affiliates (e.g. a reviewer fixture) — null the reference rather than
   // deleting those rows, which aren't this user's to remove.
   await db.update(affiliateKyc).set({ reviewedByUserId: null }).where(eq(affiliateKyc.reviewedByUserId, userId));
+  // Same reasoning for a STAFF fixture that scheduled a meeting or locked
+  // requirements on an order belonging to a DIFFERENT test user (e.g.
+  // tests/order-routes.test.ts) — meetings.scheduled_by_user_id and
+  // order_events.actor_user_id are plain FKs too, and that order (and its
+  // events/meetings, which cascade with it) isn't this user's to remove.
+  await db.update(meetings).set({ scheduledByUserId: null }).where(eq(meetings.scheduledByUserId, userId));
+  await db.update(orderEvents).set({ actorUserId: null }).where(eq(orderEvents.actorUserId, userId));
 
   const usersOrders = await db.select().from(orders).where(eq(orders.userId, userId));
   for (const order of usersOrders) {
     await deleteOrderAndAttribution(order.id);
   }
+
+  // crm_contacts.user_id is also a plain FK (docs/ARCHITECTURE.md §9 — a
+  // contact must survive a deleted account same as a payment survives a
+  // deleted order). Phase 6's checkout→confirm flow creates one of these
+  // per buyer (src/lib/crm/contacts.ts) — deleting it here cascades to any
+  // crm_activities/notes/tasks rows the fixture also produced.
+  await db.delete(crmContacts).where(eq(crmContacts.userId, userId));
 
   await db.delete(users).where(eq(users.id, userId));
 }
@@ -96,12 +113,12 @@ export async function createTestAffiliate(
 
 // A single shared service+plan fixture, created once and reused across
 // every test/file that needs *an order pointing at a valid plan* without
-// caring which one — the Phase 1 catalogue (src/lib/repository.ts) is
-// still static data, not real DB rows (Phase 9 moves it there), so there's
-// no real service/plan to reference yet outside of what tests create
-// themselves. Idempotent by slug, like scripts/seed/roles-permissions.ts,
-// so it's safe to leave in the test database rather than tearing it down
-// per test.
+// caring which one. Deliberately its own fixture rather than one of the
+// real catalogue rows scripts/seed/catalogue.ts seeds (see
+// tests/order-routes.test.ts for those) — tests that don't exercise
+// checkout itself shouldn't depend on that seed having run. Idempotent by
+// slug, like scripts/seed/roles-permissions.ts, so it's safe to leave in
+// the test database rather than tearing it down per test.
 export async function getOrCreateTestServicePlan() {
   const slug = 'test-fixture-service';
   let [service] = await db.select().from(services).where(eq(services.slug, slug));

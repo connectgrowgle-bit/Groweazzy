@@ -4,18 +4,21 @@ import { affiliateConversions, commissionEntries, orders, payments } from '@/db/
 import { verifyAndRecordPaymentStatus } from './confirm';
 import { getPaymentGateway } from './index';
 import { reverseConversionCommission } from '@/lib/attribution/commission';
+import { transitionOrderStage } from '@/lib/orders/lifecycle';
+import { upsertContactForOrder } from '@/lib/crm/contacts';
 
 // The order-side counterpart to src/lib/affiliate/fee.ts's
 // confirmAffiliateFeePayment — same verify-then-act shape, but for a
-// SERVICE_ORDER payment: mark the order PAID and approve whatever
+// SERVICE_ORDER payment: mark the order PAID, run it straight on into
+// ONBOARDING, create/advance its CRM contact, and approve whatever
 // commission entry is riding on it, rather than activating an affiliate.
 //
-// Full order lifecycle management (AWAITING_PAYMENT -> ... -> COMPLETED)
-// is Phase 6's job; this only takes the one step that's genuinely a
-// payment-webhook concern — reacting to a payment capturing — and only
-// touches order.stage when it's still AWAITING_PAYMENT, so it never
-// clobbers a later stage a fuller order state machine has already moved
-// past.
+// Only advances order.stage when it's still AWAITING_PAYMENT, via
+// src/lib/orders/lifecycle.ts's guarded state machine (never a raw column
+// write) — so a replayed webhook or one that arrives after Phase 6's fuller
+// order lifecycle has already moved the order further along is a no-op on
+// the stage (and the CRM/commission side effects below it), not a
+// regression or an error.
 export async function handleServiceOrderPaymentCaptured(
   paymentId: string,
   gatewayPaymentId: string
@@ -30,7 +33,12 @@ export async function handleServiceOrderPaymentCaptured(
   if (!order) throw new Error(`No such order: ${payment.orderId}`);
 
   if (order.stage === 'AWAITING_PAYMENT') {
-    await db.update(orders).set({ stage: 'PAID', updatedAt: new Date() }).where(eq(orders.id, order.id));
+    await transitionOrderStage(order.id, 'PAID', { note: 'Payment captured' });
+    // Chain continues straight into onboarding (docs/ARCHITECTURE.md §8) —
+    // there is no manual step between a captured payment and the client
+    // seeing their onboarding form.
+    await transitionOrderStage(order.id, 'ONBOARDING', { note: 'Onboarding started' });
+    await upsertContactForOrder(order.id);
   }
 
   // A payment capturing is what turns a tentative PENDING commission into

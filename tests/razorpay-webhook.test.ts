@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { describe, it, expect, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { affiliates, commissionEntries, affiliateConversions, orders, payments, webhookEvents } from '@/db/schema';
+import { affiliates, commissionEntries, affiliateConversions, crmContacts, orders, payments, webhookEvents } from '@/db/schema';
 import { POST } from '@/app/api/webhooks/razorpay/route';
 import { getPaymentGateway, MockPaymentGateway } from '@/lib/payments';
 import { initiateAffiliateFeePayment } from '@/lib/affiliate/fee';
@@ -108,7 +108,7 @@ describe('Razorpay webhook: payment.captured', () => {
     expect(paymentRow?.status).toBe('CAPTURED');
   });
 
-  it('marks a service order PAID and approves its PENDING commission entry', async () => {
+  it('marks a service order PAID, runs it into ONBOARDING, creates its CRM contact, and approves its PENDING commission entry', async () => {
     const { user: buyerUser } = await createTestAffiliate({ status: 'ACTIVE' }); // just need any user; affiliate unused here
     createdUserIds.push(buyerUser.id);
     const { user: refUser, affiliate: referrer } = await createTestAffiliate({ status: 'ACTIVE' });
@@ -144,7 +144,14 @@ describe('Razorpay webhook: payment.captured', () => {
     expect(res.status).toBe(200);
 
     const [orderRow] = await db.select().from(orders).where(eq(orders.id, order.id));
-    expect(orderRow?.stage).toBe('PAID');
+    // Payment capture no longer stops at PAID — it runs straight into
+    // ONBOARDING and creates the order's CRM contact in the same call
+    // (docs/ARCHITECTURE.md §8, src/lib/payments/order-webhooks.ts).
+    expect(orderRow?.stage).toBe('ONBOARDING');
+
+    const [contactRow] = await db.select().from(crmContacts).where(eq(crmContacts.email, buyerUser.email));
+    expect(contactRow).toBeDefined();
+    expect(contactRow?.stage).toBe('ONBOARDING');
 
     const [entryRow] = await db.select().from(commissionEntries).where(eq(commissionEntries.id, entry.id));
     expect(entryRow?.status).toBe('APPROVED');

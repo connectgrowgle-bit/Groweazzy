@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "service_plans_service_name_uidx" ON "service_plans" USING btree ("service_id","name");

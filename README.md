@@ -37,9 +37,20 @@ decisions still open.
   to `api.razorpay.com`, so it's tested only against a contract fake; see
   the caveat in `src/lib/payments/razorpay-gateway.ts` and Phase 13 in the
   project brief.
+- **Phase 6 (Client workflow)** — done. Real checkout (`/checkout`,
+  `POST /api/orders/checkout` + `/confirm`) against a seeded bridge of the
+  Phase 1 static catalogue into real `service_plans` rows
+  (`scripts/seed/catalogue.ts`); payment capture now runs an order straight
+  through `PAID → ONBOARDING` and creates its CRM contact in the same call.
+  Service-specific onboarding forms (`src/lib/onboarding-schemas.ts`) with
+  one shared draft/submit Zod module per service — submitting does **not**
+  lock requirements. Staff-only meeting scheduling and an explicit, one-way
+  requirements-lock action, both on permissions Phase 2 already seeded. See
+  [`docs/ARCHITECTURE.md` §23](docs/ARCHITECTURE.md#23-phase-6-client-workflow).
 
-Not yet built: client workflow (real checkout/orders), CRM, training,
-admin dashboard, the commission scheduler, and the security audit. See
+Not yet built: full CRM (dashboard, tasks, self-population from every later
+stage), training, admin dashboard, the commission scheduler, and the
+security audit. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -73,6 +84,14 @@ this is kept separate from any future demo-data seed):
 
 ```bash
 npm run db:seed:roles
+```
+
+Seed the catalogue bridge (idempotent — creates/updates real `services`/
+`service_plans` rows from the Phase 1 static catalogue so orders have a
+real plan to point at; see docs/ARCHITECTURE.md §23):
+
+```bash
+npm run db:seed:catalogue
 ```
 
 ## Testing
@@ -111,13 +130,15 @@ src/db/schema/    Drizzle schema, one file per domain (auth, client, affiliate, 
 src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue
 src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
 src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
+src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
+src/lib/crm/      CRM contact upsert (order → contact; full CRM is Phase 7)
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
-src/lib/          repository.ts (content seam), env.ts (startup validation), db-errors.ts
+src/lib/          repository.ts (content seam), catalogue.ts (bridges it to real DB rows), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express
-scripts/seed/     roles-permissions.ts (idempotent, prod-safe)
+scripts/seed/     roles-permissions.ts, catalogue.ts (both idempotent, prod-safe)
 ops/              migrate.sh, backup.sh, restore.sh
 tests/            Vitest suites — all against a real Postgres, see Testing below
 docs/             ARCHITECTURE.md

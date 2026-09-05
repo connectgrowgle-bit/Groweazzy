@@ -31,6 +31,11 @@ export const servicePlans = pgTable('service_plans', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   serviceIdx: index('service_plans_service_idx').on(t.serviceId),
+  // Doubles as the idempotency key scripts/seed/catalogue.ts upserts on —
+  // (service, plan name) is what identifies "the same plan" across reseeds,
+  // since a plan has no other stable natural key before Phase 9 gives the
+  // catalogue a real admin UI.
+  serviceNameUidx: uniqueIndex('service_plans_service_name_uidx').on(t.serviceId, t.name),
 }));
 
 // Written in the same transaction as any price update. "What did this plan

@@ -69,7 +69,7 @@ export default async function ServicePage({ params }: { params: Promise<{ slug: 
                 </div>
               </div>
               <Link
-                href={`/register?plan=${plan.id}`}
+                href={`/checkout?plan=${plan.id}`}
                 className="rounded-md bg-brand px-6 py-3 font-medium text-white hover:opacity-90"
               >
                 Get started
