@@ -1,0 +1,38 @@
+{
+  "name": "groweazzy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "drizzle-orm": "0.45.2",
+    "pg": "^8.13.1",
+    "zod": "4.5.4",
+    "argon2": "0.45.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@tailwindcss/postcss": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.7.2",
+    "drizzle-kit": "^0.30.1",
+    "eslint": "^9.18.0",
+    "eslint-config-next": "16.3.4",
+    "@eslint/eslintrc": "^3.2.0"
+  }
+}

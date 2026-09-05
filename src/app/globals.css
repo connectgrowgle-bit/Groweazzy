@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* Tailwind 4 is CSS-first config — theme tokens live here via @theme rather
+   than in a JS config file. Kept minimal for Phase 0; Phase 1 expands this
+   with the real brand palette. Note (docs/ARCHITECTURE.md §15): Tailwind 4
+   targets Safari 16.4+ — on macOS 12 and older this renders unstyled. */
+@theme {
+  --color-brand: oklch(0.55 0.18 255);
+}
+
+body {
+  color-scheme: light;
+}
