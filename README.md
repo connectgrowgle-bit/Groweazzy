@@ -113,9 +113,21 @@ decisions still open.
   deleted) closed with an opportunistic sweep. See
   [`docs/ARCHITECTURE.md` §28](docs/ARCHITECTURE.md#28-phase-11-production-prep).
 
+- **Phase 12 (Commission scheduler)** — done. `releaseMaturedCommissions`
+  (`src/lib/attribution/commission-scheduler.ts`) moves an EARNING entry
+  `APPROVED → AVAILABLE` once its hold period has elapsed — but only after
+  re-verifying the affiliate, order, and payment fresh from source, since
+  none of those retroactively edit the entry itself when they change
+  during the hold window. Triggered by an authenticated
+  `/api/cron/release-commissions` (bearer `CRON_SECRET`, either GET or
+  POST), running under a Postgres advisory lock taken on its own dedicated
+  connection (`withAdvisoryLock`, `src/db/index.ts`) so two overlapping
+  triggers can never double-process. Every run is recorded in `job_runs`.
+  See [`docs/ARCHITECTURE.md` §29](docs/ARCHITECTURE.md#29-phase-12-commission-scheduler).
+
 Not yet built: user management/audit-log/payouts/settings screens (the
-permissions exist, Phase 2; no UI yet), the commission scheduler, admin
-MFA, and real Razorpay gateway verification (Phases 12–13). See
+permissions exist, Phase 2; no UI yet), payout batch construction and real
+disbursement, admin MFA, and real Razorpay gateway verification. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -194,7 +206,7 @@ src/app/          Next.js App Router pages and API routes
 src/db/schema/    Drizzle schema, one file per domain (auth, client, affiliate, training, support)
 src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue
 src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
-src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
+src/lib/attribution/  click tracking + signed cookie, the commission ledger engine, and the release-to-AVAILABLE scheduler (Phase 12)
 src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
 src/lib/crm/      self-populating contact sync (called from transitionOrderStage), manual edits/notes/tasks/assignment
 src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authoring/publish guards, progress tracking
@@ -204,6 +216,7 @@ src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway,
 src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts, net.ts (fail-closed trusted-proxy client IP), rate-limit.ts (DB-backed fixed-window limiter + stale-bucket sweep), safe-redirect.ts (open-redirect-safe `next` handling)
 src/app/not-found.tsx, error.tsx, global-error.tsx   Branded error handling (Phase 11)
 src/app/sitemap.ts, robots.ts, icon.tsx              Crawler/production hygiene (Phase 11)
+src/app/api/cron/release-commissions/  CRON_SECRET-gated trigger for the commission scheduler (Phase 12)
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express

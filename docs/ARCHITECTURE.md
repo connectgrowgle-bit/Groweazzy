@@ -362,7 +362,7 @@ Full route list lives alongside each phase's code as it's built. At a glance:
 - **CRM/Admin** (Phase 7, 9): `/api/admin/*` behind permission checks, not role checks
 - **Training** (Phase 8): `/api/training/*`, `/api/progress`
 - **Ops**: `/api/health`, `/api/ready` (Phase 0); `/api/cron/release-commissions`
-  (§12's design, not yet built — see §18)
+  (Phase 12, §29)
 
 ## 18. Next steps
 
@@ -1202,10 +1202,111 @@ and a fresh one in the same call is not.
 
 Scope, stated plainly: this phase is anonymous-visitor and crawler-facing
 production hygiene. It does not touch the commission scheduler (§12,
-still unbuilt), admin MFA, or the real Razorpay gateway verification —
-those remain Phase 12 and Phase 13's stated jobs respectively.
+built next as Phase 12 — §29), admin MFA, or the real Razorpay gateway
+verification — those remain later phases' stated jobs.
 
 New files: `src/app/not-found.tsx`, `src/app/error.tsx`,
 `src/app/global-error.tsx`, `src/app/sitemap.ts`, `src/app/robots.ts`,
 `src/app/icon.tsx`. New test file: `tests/production-prep-routes.test.ts`.
 New export: `sweepStaleRateLimitBuckets` (`src/lib/rate-limit.ts`).
+
+## 29. Phase 12: Commission scheduler
+
+Builds exactly `releaseMaturedCommissions` as §12 describes, and nothing
+past it — admin MFA (originally bundled with this phase in planning) and
+payout batch construction/disbursement are real enough features to be
+their own phases, not sub-tasks squeezed into this one; see "Scope" below.
+
+**The pipeline this completes.** A captured payment already moved an
+EARNING `PENDING → APPROVED` (`src/lib/payments/order-webhooks.ts`,
+Phase 5/6) — real money landed. This phase adds the other half:
+`APPROVED → AVAILABLE` once `holdReleaseAt` (locked in at
+`recordConversion` time from `commission_policies.holdPeriodDays`) has
+actually elapsed. Deliberately never acts on a still-PENDING entry, even
+one past its hold date — PENDING specifically means "payment not yet
+confirmed captured," and releasing one would mean paying commission on an
+order nobody has actually paid for.
+
+**Re-verified from source, not trusted from whatever was true when the
+entry became APPROVED** — because none of the following retroactively
+edit the EARNING row itself: the affiliate can be suspended or terminated
+after the sale (only ACTIVE affiliates ever earn a conversion in the first
+place — `resolveAttributedAffiliate`, §21 — but nothing stops that from
+changing during the hold window); the order can be cancelled; the payment
+can be refunded, in part or in full (`reverseConversionCommission` inserts
+its own separate REVERSAL row and never touches the original EARNING's
+status or amount — §21/§6). A stale check here would happily release, and
+eventually pay, money that's already been clawed back elsewhere in the
+ledger. Confirmed against the real column, not the enum: `payments.status`
+never actually moves to `REFUNDED`/`PARTIALLY_REFUNDED` in this codebase
+(only `amountRefundedPaise` moves — `src/lib/admin/revenue.ts`'s own
+comment), so "still owed" is `amountRefundedPaise < amountPaise`, not a
+status compare.
+
+**A failed check leaves the entry at APPROVED, never force-moves it to any
+terminal status.** Most of these conditions can resolve themselves (a
+suspension gets lifted, a refund investigation concludes), and the next
+scheduled run re-examines the same entry exactly like the first time — no
+extra bookkeeping needed to "remember" to retry it.
+
+**Concurrency, per §12's own design**: each candidate is released inside
+its own transaction, re-selected with `SELECT ... FOR UPDATE` and the same
+`WHERE status = 'APPROVED' AND payoutId IS NULL` the outer candidate query
+used — so an entry changed by something else between the initial scan and
+its own turn (an admin action, in practice; a refund does NOT change this
+row, per the paragraph above) is a silent no-op, not a race, and not
+counted as a skip. The payment row is locked (`FOR UPDATE`) inside the
+same transaction too, closing the narrow window where a concurrent refund
+webhook's own update might otherwise be read mid-flight.
+
+**The advisory lock lives on a dedicated connection, never one borrowed
+from the pool** — Postgres advisory locks are session-scoped, so a pooled
+connection recycled to a second concurrent run would hand it the "same"
+lock and let it sail through; not a rare edge case, the default behavior
+of `pg_advisory_lock` against a pool. `src/db/index.ts`'s new
+`withAdvisoryLock(key, fn)` wraps this generically (any future scheduled
+job gets its own fixed, documented lock key) on top of the
+`getDedicatedConnection()` the schema/comments already anticipated back
+in Phase 9's own `src/db/index.ts`.
+
+**The endpoint's auth diverges from §12's original text in one way**: that
+note called for a 503 when `CRON_SECRET` isn't configured. By the time
+this phase actually landed, `src/lib/env.ts` had already made
+`CRON_SECRET` mandatory at boot (`z.string().min(16)`, no `.optional()`)
+— the whole app refuses to start without it, so that state is unreachable
+by the time any request reaches this route at all. The only real-world
+failure mode left is a missing or wrong bearer token (`Authorization:
+Bearer <CRON_SECRET>`, constant-time compared like every other secret
+check in this codebase — `src/lib/payments/webhook-signature.ts`,
+`src/lib/attribution/cookie.ts`), so that's the only case this route
+handles. Accepts both GET and POST — some schedulers only ever send GET,
+and triggering this twice concurrently is always safe (the advisory lock
+turns the second call into `{status: 'already_running'}`, never a double
+release).
+
+**`job_runs` records every trigger either way** — `SUCCEEDED`/`FAILED`,
+`itemsProcessed`/`itemsFailed`, and an `errorSummary` that also carries
+*skip* reasons (a suspended affiliate, a cancelled order, a refund), not
+just hard failures: a run that quietly skipped the same entry twenty runs
+in a row is exactly the kind of thing that needs to surface somewhere a
+human looks, per §12's "reversal failures need their own alerting, not
+just log lines nobody reads" — this reuses that same reasoning for
+skip-worthy findings generally, not literally reversal failures (which,
+per the paragraph above, this codebase's actual reversal path doesn't
+route through this job at all).
+
+**Scope, stated plainly**: this phase is the release step only. It does
+NOT build payout batch construction (grouping AVAILABLE entries — and any
+still-unpaid REVERSAL rows, which is the part that would actually need
+designing, since a REVERSAL is created directly in a terminal `REVERSED`
+status and never flows through the same AVAILABLE gate an EARNING does)
+into `payout_batches`/`payouts` rows, TDS calculation, or the real
+RazorpayX/Cashfree disbursement call — that is real design work of its
+own (D-1, D-4) and stays explicitly unbuilt. Admin MFA, planned alongside
+this phase, is likewise its own next piece of work, not folded in here.
+
+New files: `src/lib/attribution/commission-scheduler.ts`,
+`src/app/api/cron/release-commissions/route.ts`. New export:
+`withAdvisoryLock` (`src/db/index.ts`). New test files:
+`tests/commission-scheduler.test.ts`,
+`tests/commission-scheduler-routes.test.ts`.
