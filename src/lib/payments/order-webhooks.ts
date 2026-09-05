@@ -5,13 +5,14 @@ import { verifyAndRecordPaymentStatus } from './confirm';
 import { getPaymentGateway } from './index';
 import { reverseConversionCommission } from '@/lib/attribution/commission';
 import { transitionOrderStage } from '@/lib/orders/lifecycle';
-import { upsertContactForOrder } from '@/lib/crm/contacts';
 
 // The order-side counterpart to src/lib/affiliate/fee.ts's
 // confirmAffiliateFeePayment — same verify-then-act shape, but for a
 // SERVICE_ORDER payment: mark the order PAID, run it straight on into
-// ONBOARDING, create/advance its CRM contact, and approve whatever
-// commission entry is riding on it, rather than activating an affiliate.
+// ONBOARDING (which is also what creates/advances its CRM contact — see
+// transitionOrderStage's own call to syncContactFromOrderStage,
+// src/lib/crm/sync.ts), and approve whatever commission entry is riding on
+// it, rather than activating an affiliate.
 //
 // Only advances order.stage when it's still AWAITING_PAYMENT, via
 // src/lib/orders/lifecycle.ts's guarded state machine (never a raw column
@@ -38,7 +39,6 @@ export async function handleServiceOrderPaymentCaptured(
     // there is no manual step between a captured payment and the client
     // seeing their onboarding form.
     await transitionOrderStage(order.id, 'ONBOARDING', { note: 'Onboarding started' });
-    await upsertContactForOrder(order.id);
   }
 
   // A payment capturing is what turns a tentative PENDING commission into

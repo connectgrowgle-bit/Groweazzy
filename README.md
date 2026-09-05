@@ -47,9 +47,18 @@ decisions still open.
   lock requirements. Staff-only meeting scheduling and an explicit, one-way
   requirements-lock action, both on permissions Phase 2 already seeded. See
   [`docs/ARCHITECTURE.md` §23](docs/ARCHITECTURE.md#23-phase-6-client-workflow).
+- **Phase 7 (CRM)** — done. `syncContactFromOrderStage`
+  (`src/lib/crm/sync.ts`) is called from INSIDE `transitionOrderStage`
+  itself, so a contact self-populates and advances from ANY legal order
+  transition — a webhook, checkout confirm, meeting scheduling,
+  requirements-lock, or the new generic `POST /api/orders/[id]/advance`
+  (staff-only, drives `TEAM_ASSIGNED → ... → COMPLETED`) — with no call
+  site having to remember to do it itself. Staff CRM UI at `/crm` (pipeline
+  board) and `/crm/[id]` (activity timeline, notes, tasks, manual
+  stage/owner edits), all on Phase 2's existing `crm.*` permissions. See
+  [`docs/ARCHITECTURE.md` §24](docs/ARCHITECTURE.md#24-phase-7-crm).
 
-Not yet built: full CRM (dashboard, tasks, self-population from every later
-stage), training, admin dashboard, the commission scheduler, and the
+Not yet built: training, admin dashboard, the commission scheduler, and the
 security audit. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
@@ -131,7 +140,7 @@ src/lib/auth/     password, session, cookies, rbac, actor guard, permission cata
 src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
 src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
 src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
-src/lib/crm/      CRM contact upsert (order → contact; full CRM is Phase 7)
+src/lib/crm/      self-populating contact sync (called from transitionOrderStage), manual edits/notes/tasks/assignment
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
 src/lib/          repository.ts (content seam), catalogue.ts (bridges it to real DB rows), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts

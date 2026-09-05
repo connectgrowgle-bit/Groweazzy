@@ -43,6 +43,11 @@ export default async function AccountPage() {
           <Link href="/affiliate/dashboard" className="text-sm text-brand hover:underline">
             Affiliate dashboard →
           </Link>
+          {permissions.includes('crm.view') && (
+            <Link href="/crm" className="text-sm text-brand hover:underline">
+              CRM →
+            </Link>
+          )}
         </div>
         <div className="mt-4">
           <LogoutButton />

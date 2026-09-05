@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { orderEvents, orders } from '@/db/schema';
+import { syncContactFromOrderStage } from '@/lib/crm/sync';
 
 // Service → checkout → payment → verification → order → CRM contact →
 // onboarding → meeting → requirements locked → team assigned → work →
@@ -65,9 +66,9 @@ export async function transitionOrderStage(
       .returning();
     if (!updated) throw new Error('Update did not return a row');
 
-    // Append-only timeline — this is what CRM self-population (Phase 7)
-    // reads from, rather than something a staff member has to remember to
-    // update by hand.
+    // Append-only timeline — order_events is the record of what happened;
+    // crm_contacts/crm_activities (below) is the derived, self-populating
+    // view built on top of it (docs/ARCHITECTURE.md §9).
     await tx.insert(orderEvents).values({
       orderId,
       fromStage: current.stage as typeof orders.$inferSelect.stage,
@@ -75,6 +76,12 @@ export async function transitionOrderStage(
       actorUserId,
       note,
     });
+
+    // Runs on every legal transition, from every call site (present or
+    // future), rather than each one having to remember its own CRM call —
+    // "fills itself from the workflow," not a second system someone has to
+    // keep in sync by hand.
+    await syncContactFromOrderStage(tx, orderId, to);
 
     return updated;
   });

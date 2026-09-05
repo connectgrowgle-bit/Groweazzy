@@ -6,7 +6,10 @@ import {
   affiliateKyc,
   affiliates,
   commissionEntries,
+  crmActivities,
   crmContacts,
+  crmNotes,
+  crmTasks,
   meetings,
   orderEvents,
   orders,
@@ -76,6 +79,18 @@ export async function deleteTestUser(userId: string) {
   // events/meetings, which cascade with it) isn't this user's to remove.
   await db.update(meetings).set({ scheduledByUserId: null }).where(eq(meetings.scheduledByUserId, userId));
   await db.update(orderEvents).set({ actorUserId: null }).where(eq(orderEvents.actorUserId, userId));
+  // Phase 7's CRM tooling (src/lib/crm/manage.ts) adds three more of these:
+  // a staff fixture can own, act on, or be assigned a task against a
+  // DIFFERENT test user's contact. crm_notes.author_user_id is NOT NULL
+  // though (unlike the others) — a note can't survive its author being
+  // nulled out, so a staff fixture's own authored notes on OTHER contacts
+  // are deleted outright here rather than preserved; that's a fine loss for
+  // disposable test fixtures, unlike the payments/orders this function goes
+  // out of its way not to touch.
+  await db.update(crmContacts).set({ ownerUserId: null }).where(eq(crmContacts.ownerUserId, userId));
+  await db.update(crmActivities).set({ actorUserId: null }).where(eq(crmActivities.actorUserId, userId));
+  await db.update(crmTasks).set({ assignedUserId: null }).where(eq(crmTasks.assignedUserId, userId));
+  await db.delete(crmNotes).where(eq(crmNotes.authorUserId, userId));
 
   const usersOrders = await db.select().from(orders).where(eq(orders.userId, userId));
   for (const order of usersOrders) {
@@ -84,8 +99,8 @@ export async function deleteTestUser(userId: string) {
 
   // crm_contacts.user_id is also a plain FK (docs/ARCHITECTURE.md §9 — a
   // contact must survive a deleted account same as a payment survives a
-  // deleted order). Phase 6's checkout→confirm flow creates one of these
-  // per buyer (src/lib/crm/contacts.ts) — deleting it here cascades to any
+  // deleted order). The order workflow creates one of these per buyer
+  // (src/lib/crm/sync.ts) — deleting it here cascades to any
   // crm_activities/notes/tasks rows the fixture also produced.
   await db.delete(crmContacts).where(eq(crmContacts.userId, userId));
 

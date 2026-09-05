@@ -720,3 +720,83 @@ them**, same discipline as §19-§22:
    that stopped being the final word the moment this phase's chain landed.
    Updated the assertion (and added CRM-contact coverage to the same test)
    rather than treating it as a false alarm to silence.
+
+## 24. Phase 7: CRM
+
+Builds the rest of §9's promise — **"the CRM fills itself from the
+workflow, it is not a separate system someone has to remember to
+update"** — as infrastructure, not a per-endpoint habit.
+
+**The sync lives inside the state machine, not at each call site.**
+Phase 6's `upsertContactForOrder` (one call, wired into the one place an
+order became `PAID → ONBOARDING`) is retired in favour of
+`syncContactFromOrderStage` (`src/lib/crm/sync.ts`), called from INSIDE
+`transitionOrderStage` itself (`src/lib/orders/lifecycle.ts`), inside the
+same transaction as the stage update and the `order_events` insert. This
+means every legal order transition — from a webhook, a checkout confirm,
+staff scheduling a meeting, locking requirements, or this phase's own new
+generic advance endpoint (below) — self-populates the CRM automatically,
+including transitions no code written yet even knows about. Nothing above
+`transitionOrderStage` had to change to get this; that was the point of
+putting it there instead of duplicating a call at every site that
+transitions an order.
+
+`ORDER_STAGE_TO_CRM_STAGE` collapses `MEETING_SCHEDULED` and
+`REQUIREMENTS_LOCKED` into the same `ONBOARDING` bucket the CRM pipeline
+also uses for pure `ONBOARDING` — a sales/ops screen doesn't need a finer
+distinction than "getting the client set up" for those three. Contact
+creation, email-dedup, and `userId`-backfill onto a pre-existing
+lead-form-only contact are unchanged in behaviour from Phase 6, just moved.
+`AWAITING_PAYMENT` and `PAID` still have no CRM stage of their own — a
+contact only exists once someone is actually onboarding, matching the old
+behaviour of creating it at the `ONBOARDING` transition, not at checkout.
+
+**Known, documented simplification, not silently swept under the rug:** a
+contact's stage is "whichever order touched it most recently," not an
+aggregate across every order a buyer has placed. For a single-seller
+business where one contact normally has one active order at a time this
+is the right behaviour day to day; a buyer with two orders progressing at
+once could see an earlier order's own stage stop being reflected the
+moment a newer order's transition overwrites the shared contact row.
+Solving that properly needs a per-order (not per-contact) pipeline view,
+which is out of scope here — flagged rather than half-solved.
+
+**A generic order-advance endpoint, introduced specifically so this
+phase's sync is exercisable end to end.** Phase 6 gave `MEETING_SCHEDULED`
+and `REQUIREMENTS_LOCKED` their own named actions because those carry real
+side effects and preconditions (a meetings row; refusing to lock a
+draft-only brief). `TEAM_ASSIGNED → IN_PROGRESS → REVIEW → DELIVERED →
+COMPLETED` carry none of that yet, so `POST /api/orders/[id]/advance`
+(`{ toStage }`, gated on the same `order.update_stage` STAFF already holds)
+is a plain, validated call into `transitionOrderStage` — no new permission,
+no new business logic. Without it, this phase's own self-population
+mechanism would have no way to be driven past `REQUIREMENTS_LOCKED` until
+Phase 9 builds a proper ops dashboard; a real staff UI for fulfillment
+work (assigning specific team members, tracking what's in review, etc.)
+stays that phase's job.
+
+**Staff-facing CRM UI** (`/crm`, `/crm/[id]`,
+`src/components/CrmPipeline.tsx`, `CrmContactDetail.tsx`): a kanban-style
+pipeline grouped by stage, and a contact detail view combining the
+activity timeline (both auto-synced and manual entries, same
+`crm_activities` table), notes, tasks, manual stage/name/phone edits, owner
+assignment, and every order linked by `userId`. Gated entirely by the API
+layer (`crm.view`/`crm.edit`/`crm.assign`/`crm.task.manage` —
+all four already in STAFF's default role since Phase 2, no catalogue
+change needed this phase either) — the pages themselves only require a
+session to exist, same split as every other page in this codebase
+(docs/ARCHITECTURE.md rule 11): the UI renders the 403 a disallowed fetch
+returns rather than duplicating the permission check itself.
+
+**Test-cleanup fallout, same shape as Phase 6's:** this phase's tables
+introduced four more plain (non-cascading) FKs to `users.id` —
+`crm_contacts.owner_user_id`, `crm_activities.actor_user_id`,
+`crm_tasks.assigned_user_id`, and the one genuine wrinkle,
+`crm_notes.author_user_id`, which is `NOT NULL` and so can't simply be
+nulled like the other three. `tests/helpers.ts`'s `deleteTestUser` nulls
+the first three and deletes a fixture's own authored notes on OTHER
+contacts outright — an acceptable loss for disposable test data, unlike
+the payments/orders this same function goes out of its way to preserve.
+Found the same way as Phase 6's two: a STAFF fixture acting on a different
+test user's contact, failing cleanup with a foreign-key violation instead
+of a silent pass.
