@@ -69,9 +69,24 @@ decisions still open.
   and completes at 90% — computed under a row lock
   (`src/lib/training/progress.ts`), not a raw SQL `GREATEST`. See
   [`docs/ARCHITECTURE.md` §25](docs/ARCHITECTURE.md#25-phase-8-training-portal).
+- **Phase 9 (Admin dashboard)** — done. The service catalogue actually
+  moved into the database — `src/lib/repository.ts` now reads
+  `services`/`service_plans` directly, and every public page kept working
+  with zero changes (that was the whole point of routing through the seam
+  since Phase 1). Plans gained a stable public `key` decoupled from their
+  uuid, so an admin renaming a plan or a future reseed can't break an
+  existing checkout link. `service.edit` (copy) and `service.pricing`
+  (amounts, plans — creating/deactivating/repricing) stay strictly
+  separate permissions; every price change requires a reason and writes a
+  `service_plan_price_history` row in the same transaction
+  (`src/lib/catalogue-admin.ts`). Revenue and affiliate-performance
+  reports (`/admin`, `src/lib/admin/revenue.ts`) are summed fresh from
+  source rows on every request — nothing cached. See
+  [`docs/ARCHITECTURE.md` §26](docs/ARCHITECTURE.md#26-phase-9-admin-dashboard).
 
-Not yet built: admin dashboard, the commission scheduler, and the security
-audit. See
+Not yet built: user management/audit-log/payouts/settings screens (the
+permissions exist, Phase 2; no UI yet), the commission scheduler, and the
+security audit. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -154,9 +169,10 @@ src/lib/attribution/  click tracking + signed cookie, and the commission ledger 
 src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
 src/lib/crm/      self-populating contact sync (called from transitionOrderStage), manual edits/notes/tasks/assignment
 src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authoring/publish guards, progress tracking
+src/lib/admin/    live (uncached) revenue + affiliate-performance reporting
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
-src/lib/          repository.ts (content seam), catalogue.ts (bridges it to real DB rows), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts
+src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express

@@ -2,15 +2,24 @@ import { bigint, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, u
 import { users, files } from './auth';
 import { crmStageEnum, crmTaskStatusEnum, orderStageEnum } from './enums';
 
-// The Phase 1 repository seam backs these with static data; Phase 9 moves
-// the catalogue here without touching any page. Slugs are what public URLs
-// and referral links (`/[slug]?ref=...`) use.
+// The Phase 1 repository seam backed these with static data; Phase 9 moved
+// the catalogue here — src/lib/repository.ts now reads from this table
+// instead of a hardcoded array, and nothing above the seam (pages,
+// checkout) had to change. Slugs are what public URLs and referral links
+// (`/[slug]?ref=...`) use.
 export const services = pgTable('services', {
   id: uuid('id').primaryKey().defaultRandom(),
   slug: varchar('slug', { length: 100 }).notNull(), // "real-estate-qualified-buyers" | "ai-content-avatar" | "unlimited-video-editing"
   name: varchar('name', { length: 200 }).notNull(),
+  tagline: text('tagline').notNull().default(''),
+  audience: varchar('audience', { length: 200 }).notNull().default(''),
   shortDescription: text('short_description').notNull(),
   longDescriptionHtml: text('long_description_html').notNull(),
+  // Bulleted marketing copy — an ordered list of short strings, not
+  // structured content, so plain jsonb string arrays are enough; nothing
+  // downstream queries into these, only renders them in order.
+  features: jsonb('features').$type<string[]>().notNull().default([]),
+  howItWorks: jsonb('how_it_works').$type<string[]>().notNull().default([]),
   isActive: varchar('is_active', { length: 5 }).notNull().default('true'), // "true"/"false" kept simple for the catalogue toggle
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -18,12 +27,23 @@ export const services = pgTable('services', {
   slugUidx: uniqueIndex('services_slug_uidx').on(t.slug),
 }));
 
-// service.edit (name/description/isActive) and service.pricing (this table)
-// are gated by separate permissions — see docs/ARCHITECTURE.md §11.
+// service.edit (name/tagline/audience/description/features/howItWorks) and
+// service.pricing (this whole table — "amounts, plans" per
+// docs/ARCHITECTURE.md §11, not just the price column) are gated by
+// separate permissions — someone trusted to fix a typo is not thereby
+// trusted to reprice the catalogue or add/retire a plan.
 export const servicePlans = pgTable('service_plans', {
   id: uuid('id').primaryKey().defaultRandom(),
   serviceId: uuid('service_id').notNull().references(() => services.id, { onDelete: 'cascade' }),
+  // The STABLE public identifier (e.g. "aca-standard") that checkout links
+  // (`/checkout?plan=...`) and orders.servicePlanId's callers use — never
+  // the raw uuid above, which is free to mean nothing outside this row.
+  // Decoupling the public key from the primary key means an admin
+  // relabelling a plan's display name, or a future re-seed, never breaks
+  // an existing bookmarked/shared checkout link.
+  key: varchar('key', { length: 100 }).notNull(),
   name: varchar('name', { length: 200 }).notNull(),
+  billingNote: varchar('billing_note', { length: 100 }).notNull().default(''),
   // All money as integer paise in bigint. Never a float, never rupees.
   pricePaise: bigint('price_paise', { mode: 'number' }).notNull(),
   isActive: varchar('is_active', { length: 5 }).notNull().default('true'),
@@ -31,11 +51,11 @@ export const servicePlans = pgTable('service_plans', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   serviceIdx: index('service_plans_service_idx').on(t.serviceId),
-  // Doubles as the idempotency key scripts/seed/catalogue.ts upserts on —
-  // (service, plan name) is what identifies "the same plan" across reseeds,
-  // since a plan has no other stable natural key before Phase 9 gives the
-  // catalogue a real admin UI.
+  // (service, plan name) is still the idempotency key scripts/seed/catalogue.ts
+  // upserts new plans on; `key` below is what the rest of the app resolves
+  // a plan BY, a distinct concern from "how do I avoid reseeding a dupe."
   serviceNameUidx: uniqueIndex('service_plans_service_name_uidx').on(t.serviceId, t.name),
+  keyUidx: uniqueIndex('service_plans_key_uidx').on(t.key),
 }));
 
 // Written in the same transaction as any price update. "What did this plan

@@ -15,6 +15,13 @@
       "when": 1788608409046,
       "tag": "0001_tired_marvel_boy",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788620047460,
+      "tag": "0002_crazy_vertigo",
+      "breakpoints": true
     }
   ]
 }

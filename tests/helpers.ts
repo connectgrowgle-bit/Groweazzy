@@ -149,7 +149,7 @@ export async function getOrCreateTestServicePlan() {
   if (!plan) {
     [plan] = await db
       .insert(servicePlans)
-      .values({ serviceId: service.id, name: 'Standard', pricePaise: 1000000 })
+      .values({ serviceId: service.id, key: 'test-fixture-standard', name: 'Standard', pricePaise: 1000000 })
       .returning();
   }
   if (!plan) throw new Error('failed to create test fixture service plan');

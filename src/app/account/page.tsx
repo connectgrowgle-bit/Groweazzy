@@ -60,6 +60,13 @@ export default async function AccountPage() {
               Training — Author →
             </Link>
           )}
+          {(permissions.includes('service.view') ||
+            permissions.includes('report.revenue.view') ||
+            permissions.includes('report.affiliate.view')) && (
+            <Link href="/admin" className="text-sm text-brand hover:underline">
+              Admin →
+            </Link>
+          )}
         </div>
         <div className="mt-4">
           <LogoutButton />

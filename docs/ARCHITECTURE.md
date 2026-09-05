@@ -883,3 +883,101 @@ unlike Phase 1's three real services, there is no real training script to
 seed, so none was invented. The full authoring UI (`/training/admin`)
 supports creating any number of courses/modules/videos once real content
 exists.
+
+## 26. Phase 9: Admin dashboard
+
+**The catalogue actually moved into the database — the payoff of a seam
+that's been sitting there since Phase 0.** `src/lib/repository.ts`'s
+`getServices`/`getServiceBySlug`/`getServicePlan` now query
+`services`/`service_plans` directly; every public page (`/`, `/services`,
+`/pricing`, `/[slug]`) and the checkout flow kept working with ZERO
+changes, because they only ever called the seam, never the old static
+array. The original Phase 1 marketing copy didn't disappear — it moved to
+`src/lib/catalogue-seed-data.ts` as the one-time bootstrap
+`scripts/seed/catalogue.ts` writes into the database; from here on the
+database (edited via `/admin/services`) is the live source, and re-editing
+that seed file has no effect on a database that's already been seeded.
+
+**A stable public key, decoupled from the primary key.** Plans gained a
+`service_plans.key` column (e.g. `"aca-standard"`) — the identifier
+checkout links and `resolveServicePlan` actually use, never the row's own
+uuid. This means an admin renaming a plan's display name, or even a future
+re-seed, can never break an existing bookmarked or shared `/checkout?plan=...`
+link — the two identifiers can't collide. `resolveServicePlan` also
+simplified in the same change: Phase 6's two-hop bridge (static array →
+service slug → plan name → DB row) collapses to one direct lookup by
+`key`, now that there's no static array to bridge from anymore.
+
+**Schema addition, not a breaking one.** `services` gained
+`tagline`/`audience`/`features`/`howItWorks` (the marketing copy the
+static array always had but the Phase 0 schema hadn't caught up to yet);
+`service_plans` gained `key` and `billing_note`. Migrating this required
+clearing the (disposable, pre-launch) dev/test databases' existing
+services/service_plans/orders rows first, since `key NOT NULL` with no
+default can't land on a table that already has rows — a real production
+migration on live data would instead add the column nullable, backfill,
+then tighten to `NOT NULL` in a follow-up migration; this build had no
+live data yet, so the simpler path was taken and is called out here
+explicitly rather than presented as the general-purpose pattern.
+
+**service.edit vs service.pricing, exactly as specified, nothing blurred.**
+`src/lib/catalogue-admin.ts` splits cleanly: `updateServiceCopy`
+(name/tagline/audience/description/features/howItWorks/isActive) is
+`service.edit`; `createServicePlan`/`updateServicePlanDetails`/
+`updateServicePlanPrice` (creating a plan, renaming it, deactivating it, or
+repricing it — "amounts, plans" per §11, not just the price column) are
+all `service.pricing`. A CONTENT_MANAGER fixture and a FINANCE fixture
+each getting a real 403 on the other's territory is asserted directly in
+`tests/admin-routes.test.ts`, not just implied by the permission catalogue.
+
+**Every price change requires a reason and writes history in the same
+transaction — literally, not just by convention.** `updateServicePlanPrice`
+takes `reason` as a required (non-optional) parameter, and the API route's
+Zod schema makes it a required field too — there is no code path that
+changes a price without one. The write itself is one `db.transaction`: row-lock
+the plan, insert the `service_plan_price_history` row, then update
+`pricePaise`. Creating a brand-new plan writes no history row (there's no
+"old price" to record a change against — the schema's `oldPricePaise`/
+`newPricePaise` columns are both `NOT NULL`, so a creation event doesn't
+fit this table's shape, and shouldn't be forced into it).
+
+**Deactivating something takes it out of new circulation without deleting
+data an order still points at.** `resolveServicePlan` — the one function
+checkout actually calls — requires BOTH the plan and its service to be
+`isActive`; `repository.ts`'s public reads filter services the same way.
+An admin can pull a service or plan out of the storefront (or a bad price
+mid-edit) by toggling a flag, and every existing order's `servicePlanId`
+FK still resolves fine — nothing about deactivation deletes or orphans a
+row.
+
+**Revenue is computed fresh on every request, matching §11's own
+instruction not to cache.** `src/lib/admin/revenue.ts`'s `getRevenueSummary`
+sums `payments` rows filtered to `status = 'CAPTURED'`, net of
+`amountRefundedPaise`, on every call — no memoized value, no materialized
+view, nothing this module holds between requests. One simplification worth
+naming: the codebase never actually sets a payment's status to `REFUNDED`
+or `PARTIALLY_REFUNDED` (only `amountRefundedPaise` moves, in
+`src/lib/payments/order-webhooks.ts`'s refund handler) — so filtering on
+`CAPTURED` alone, refunds subtracted, is already the complete, correct
+figure; there was no second status value this function needed to also
+handle. `getAffiliatePerformance` sums the commission ledger the same
+way the CANCELLED-vs-REVERSED design (§6) already implies: skip
+`CANCELLED` entries outright (they never should have counted), sum
+everything else directly (a `REVERSAL` row's negative `amountPaise`
+already nets out its original `EARNING` row with no special-casing
+needed).
+
+**report.revenue.view and report.affiliate.view stay independently
+gated**, matching D-6's spirit (§13) of narrow, purpose-specific grants —
+`GET /api/admin/revenue` returns whichever section(s) the caller actually
+holds a permission for, `null` for the other, rather than an all-or-nothing
+gate on "can see the admin dashboard."
+
+**Scope, stated plainly:** this phase delivers exactly what §11
+describes — catalogue-into-database with the edit/pricing split and price
+history, plus live (never-cached) revenue and affiliate-performance
+reporting. It does not add user management, an audit-log viewer, a payouts
+console, or a settings screen — `user.view`/`user.suspend`, `audit.view`,
+`payout.*`, and `settings.*` are all real permissions already seeded
+(Phase 2), waiting for screens that weren't this phase's stated job to
+build.
