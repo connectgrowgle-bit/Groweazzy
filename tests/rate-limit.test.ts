@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { rateLimitBuckets } from '@/db/schema';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { checkRateLimit, sweepStaleRateLimitBuckets } from '@/lib/rate-limit';
 
 const createdKeys: string[] = [];
 
@@ -61,5 +61,27 @@ describe('checkRateLimit (src/lib/rate-limit.ts)', () => {
     );
     const allowedCount = results.filter((r) => r.allowed).length;
     expect(allowedCount).toBe(5);
+  });
+});
+
+describe('sweepStaleRateLimitBuckets (src/lib/rate-limit.ts)', () => {
+  it('deletes only rows whose window started more than 24h before the given `now`', async () => {
+    const staleKey = testKey('sweep-stale');
+    const freshKey = testKey('sweep-fresh');
+    const now = new Date('2026-01-15T12:00:00Z');
+
+    await db.insert(rateLimitBuckets).values([
+      { key: staleKey, count: 1, windowStartAt: new Date(now.getTime() - 25 * 60 * 60 * 1000) },
+      { key: freshKey, count: 1, windowStartAt: new Date(now.getTime() - 1 * 60 * 60 * 1000) },
+    ]);
+
+    const deletedCount = await sweepStaleRateLimitBuckets(now);
+    expect(deletedCount).toBeGreaterThanOrEqual(1);
+
+    const remainingStale = await db.select().from(rateLimitBuckets).where(eq(rateLimitBuckets.key, staleKey));
+    expect(remainingStale).toHaveLength(0);
+
+    const remainingFresh = await db.select().from(rateLimitBuckets).where(eq(rateLimitBuckets.key, freshKey));
+    expect(remainingFresh).toHaveLength(1);
   });
 });

@@ -104,8 +104,18 @@ decisions still open.
   for the full writeup, including what was deliberately left as an
   accepted trade-off rather than "fixed."
 
+- **Phase 11 (Production prep)** — done. Branded error handling for every
+  case Next.js's own boundary hierarchy covers (`not-found.tsx`,
+  `error.tsx`, and a bare-bones `global-error.tsx` for a root-layout
+  crash); `robots.txt`/`sitemap.xml`/a generated favicon, all previously
+  entirely absent; and a real unbounded-growth bug in Phase 10's own
+  `rate_limit_buckets` table (a row per distinct key that never gets
+  deleted) closed with an opportunistic sweep. See
+  [`docs/ARCHITECTURE.md` §28](docs/ARCHITECTURE.md#28-phase-11-production-prep).
+
 Not yet built: user management/audit-log/payouts/settings screens (the
-permissions exist, Phase 2; no UI yet), and the commission scheduler. See
+permissions exist, Phase 2; no UI yet), the commission scheduler, admin
+MFA, and real Razorpay gateway verification (Phases 12–13). See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -130,8 +140,8 @@ npm run dev
 ```
 
 Visit `http://localhost:3000`. `http://localhost:3000/api/health` and
-`/api/ready` are the liveness/readiness endpoints (Phase 11 will move these
-into your platform's actual health checks).
+`/api/ready` are the liveness/readiness endpoints — point your deploy
+platform's actual health checks at these.
 
 Seed the permission catalogue and default roles (idempotent, safe to run on
 every deploy — see docs/ARCHITECTURE.md and the script's own header for why
@@ -191,7 +201,9 @@ src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authori
 src/lib/admin/    live (uncached) revenue + affiliate-performance reporting
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
-src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts, net.ts (fail-closed trusted-proxy client IP), rate-limit.ts (DB-backed fixed-window limiter), safe-redirect.ts (open-redirect-safe `next` handling)
+src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts, net.ts (fail-closed trusted-proxy client IP), rate-limit.ts (DB-backed fixed-window limiter + stale-bucket sweep), safe-redirect.ts (open-redirect-safe `next` handling)
+src/app/not-found.tsx, error.tsx, global-error.tsx   Branded error handling (Phase 11)
+src/app/sitemap.ts, robots.ts, icon.tsx              Crawler/production hygiene (Phase 11)
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express

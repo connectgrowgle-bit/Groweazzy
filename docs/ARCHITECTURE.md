@@ -361,7 +361,8 @@ Full route list lives alongside each phase's code as it's built. At a glance:
 - **Payments** (Phase 5): `/api/payments/webhook` (Razorpay), `/api/payments/verify`
 - **CRM/Admin** (Phase 7, 9): `/api/admin/*` behind permission checks, not role checks
 - **Training** (Phase 8): `/api/training/*`, `/api/progress`
-- **Ops** (Phase 11): `/api/health`, `/api/ready`, `/api/cron/release-commissions`
+- **Ops**: `/api/health`, `/api/ready` (Phase 0); `/api/cron/release-commissions`
+  (§12's design, not yet built — see §18)
 
 ## 18. Next steps
 
@@ -1120,3 +1121,91 @@ New library files: `src/lib/net.ts`, `src/lib/rate-limit.ts`,
 `src/lib/safe-redirect.ts`. New test files: `tests/rate-limit.test.ts`,
 `tests/safe-redirect.test.ts`, `tests/net.test.ts`,
 `tests/auth-security.test.ts`.
+
+## 28. Phase 11: Production prep
+
+Self-scoped the same way Phase 10 was — no written spec section existed
+for this one either, just "production prep" as a to-do. Approached it as
+a second, narrower audit: what does an anonymous visitor or a crawler
+actually see today that a real production launch can't ship with, and
+what silently grows forever once real traffic hits it. Four real gaps
+found, all fixed and tested; nothing here is checklist theater — every
+item below was verified missing before it was added.
+
+**No branded error handling anywhere.** A thrown error under any page, a
+404, or (worse) a crash in the root layout itself all fell through to
+Next's bare default output — acceptable in development, not something to
+launch with. Added three files matching Next's own error-boundary
+hierarchy: `src/app/not-found.tsx` (wrapped in the same `PageShell` every
+real page uses, so a stale/mistyped catalogue link still lands on a page
+with the site's actual header/nav/footer), `src/app/error.tsx` (a route
+error boundary — also `PageShell`-wrapped, and deliberately never renders
+`error.message`: Next.js already strips it from what reaches the browser
+in production, but there's no reason to depend on that and render
+arbitrary error text even in development), and `src/app/global-error.tsx`
+(the last resort, fired only when the root layout itself throws — it has
+to render its own bare `<html>/<body>` since at that point Next has
+discarded the layout that would have supplied them, so it deliberately
+skips `PageShell`/`globals.css`/every other component that could itself
+be the reason the layout failed, in favor of plain inline styles with as
+little as possible left to break).
+
+**No `robots.txt`, `sitemap.xml`, or favicon existed at all.** A real
+public marketing site needs all three at launch, not as a later
+afterthought — a missing sitemap doesn't error, it just means search
+engines discover pages slower and never find catalogue pages with no
+inbound link. Added `src/app/sitemap.ts` (built from a literal list of
+public static paths plus `getServices()` for every currently-active
+service slug — proven live, not hypothetical, by
+`tests/production-prep-routes.test.ts` asserting a real seeded slug
+appears), `src/app/robots.ts` (disallows the same non-public surface
+`middleware.ts`'s `PROTECTED_PREFIXES` already gates — belt-and-suspenders
+for a well-behaved crawler, never a substitute for the real auth check),
+and `src/app/icon.tsx` (a generated PNG via `next/og`'s `ImageResponse`
+rather than a checked-in binary, since no design asset existed anywhere
+in the repo to check in).
+
+*A build-time trap this surfaced immediately:* both new routes call
+`getEnv()`, which cross-validates the ENTIRE app configuration (every
+secret, not just `APP_URL`) — and Next.js statically prerenders a route
+like this at `next build` time by default. No other static page in this
+app calls `getEnv()`, so this was the first thing to break a production
+build over it: `next build` has no reason to have `SESSION_SECRET`,
+`PII_ENCRYPTION_KEY`, etc. available, and building without them now
+failed outright on `/robots.txt`. Fixed with `export const dynamic =
+'force-dynamic'` on both files, so they render per-request instead —
+consistent with this build's existing "nothing admin-facing is cached"
+stance (§11) for the sitemap's service list, and simply necessary for
+`robots.ts` to ever build at all.
+
+**`rate_limit_buckets` had no cleanup path — a real, if slow, unbounded-
+growth bug in Phase 10's own new table.** The fixed-window design resets
+an existing key's row in place, but never deletes one: every distinct
+email that ever attempted a login and every distinct IP that ever hit
+register or contact leaves a row that sits there forever once its window
+closes, whether or not that key is ever seen again. A stream of one-off
+signups from throwaway addresses, or a botnet rotating source IPs, both
+leave permanent dead weight. Added `sweepStaleRateLimitBuckets()`
+(`src/lib/rate-limit.ts`) — deletes any row whose window started more
+than 24 hours ago (every `windowSeconds` this app actually configures is
+measured in minutes, so a row that old has been inert for a long time;
+deleting it changes nothing about the next request from that key, which
+would start a fresh window regardless) — wired in as a 1%-probability
+opportunistic sweep inside `checkRateLimit` itself, since this app has no
+cron runner yet outside `CRON_SECRET`-gated endpoints (§12's commission
+scheduler, still not built) and standing one up solely for this would be
+a disproportionate amount of new infrastructure for what it's for.
+Exported separately so a future scheduled entry point can call it
+directly instead of waiting on traffic. Covered by
+`tests/rate-limit.test.ts`, asserting a deliberately old row is deleted
+and a fresh one in the same call is not.
+
+Scope, stated plainly: this phase is anonymous-visitor and crawler-facing
+production hygiene. It does not touch the commission scheduler (§12,
+still unbuilt), admin MFA, or the real Razorpay gateway verification —
+those remain Phase 12 and Phase 13's stated jobs respectively.
+
+New files: `src/app/not-found.tsx`, `src/app/error.tsx`,
+`src/app/global-error.tsx`, `src/app/sitemap.ts`, `src/app/robots.ts`,
+`src/app/icon.tsx`. New test file: `tests/production-prep-routes.test.ts`.
+New export: `sweepStaleRateLimitBuckets` (`src/lib/rate-limit.ts`).
