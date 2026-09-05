@@ -21,6 +21,11 @@ decisions still open.
   `PaymentGateway` interface with `MockPaymentGateway`, and the affiliate
   registration fee flow wired end-to-end (mock payment only — Razorpay is
   Phase 5).
+- **Phase 4 (Attribution & Commission)** — done. `?ref=CODE` works on any
+  public URL via middleware + a signed click-tracking cookie; an
+  append-only commission ledger with the CANCELLED-vs-REVERSED distinction
+  (§6), proportional and idempotent refund reversal, and the rate locked
+  into each entry at creation time.
 
 Not yet built: real payments (Razorpay), client workflow, CRM, training,
 admin dashboard, the commission scheduler, and the security audit. See
@@ -75,13 +80,17 @@ DATABASE_URL=postgres://USER:PASS@localhost:5432/groweazzy_test npm test
 
 `tests/global-setup.ts` builds the app once and starts a single shared
 `next start` server (port 3900) for the whole run, torn down after —
-`tests/auth-routes.test.ts` and `tests/affiliate-routes.test.ts` drive it
-over real HTTP rather than calling route handlers as plain functions,
-required because `src/lib/auth/cookies.ts` uses `next/headers`, which only
-works inside Next's own request pipeline. It's one shared server, not one
-per test file, because Next.js 16 refuses to run a second `next dev` (or,
-it turns out, the naive equivalent) against the same project directory —
-see `docs/ARCHITECTURE.md` §20 for what that looked like before this fix.
+`tests/auth-routes.test.ts`, `tests/affiliate-routes.test.ts`, and
+`tests/attribution-routes.test.ts` drive it over real HTTP rather than
+calling route handlers as plain functions, required because
+`src/lib/auth/cookies.ts` uses `next/headers`, which only works inside
+Next's own request pipeline. It's one shared server, not one per test file,
+because Next.js 16 refuses to run a second `next dev` (or, it turns out,
+the naive equivalent) against the same project directory — see
+`docs/ARCHITECTURE.md` §20 for what that looked like before this fix, and
+§21 for two more sharp edges found in the same harness (a leftover server
+surviving between runs, and two processes needing the exact same secret —
+now centralized in `tests/test-env-constants.ts`).
 
 ## Project layout
 
@@ -89,7 +98,8 @@ see `docs/ARCHITECTURE.md` §20 for what that looked like before this fix.
 src/app/          Next.js App Router pages and API routes
 src/db/schema/    Drizzle schema, one file per domain (auth, client, affiliate, training, support)
 src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue
-src/lib/affiliate/  lifecycle state machine, KYC, registration fee flow, commission policy
+src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
+src/lib/attribution/  click tracking + signed cookie, and the commission ledger engine
 src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
 src/lib/payments/ PaymentGateway interface + MockPaymentGateway
 src/lib/          repository.ts (content seam), env.ts (startup validation), db-errors.ts

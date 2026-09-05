@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { SHARED_TEST_ENV } from './test-env-constants';
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
@@ -19,17 +20,19 @@ if (!/test/.test(process.env.DATABASE_URL)) {
 // Fixed, non-secret defaults for the rest of getEnv()'s required
 // configuration (src/lib/env.ts) — only DATABASE_URL identifies which real
 // database a test run hits, so that's the one thing this deliberately does
-// NOT default. Set these in the environment (or a .env.test.local) to
-// override for a specific run; nothing here is a real credential.
+// NOT default. SESSION_SECRET/PII_ENCRYPTION_KEY/CRON_SECRET come from
+// SHARED_TEST_ENV (tests/test-env-constants.ts) — this process (direct
+// library calls) and the server tests/global-setup.ts spawns (HTTP-level
+// calls) MUST agree on these exact values, or anything that signs
+// something in one process and verifies it in the other (e.g.
+// tests/attribution-routes.test.ts) fails looking like a real bug.
 const TEST_ENV_DEFAULTS: Record<string, string> = {
   APP_ENV: 'development',
   APP_URL: 'http://localhost:3000',
   DATABASE_SSL: 'false',
-  SESSION_SECRET: 'test-only-session-secret-at-least-32-characters-long',
-  PII_ENCRYPTION_KEY: '0'.repeat(64),
+  ...SHARED_TEST_ENV,
   PAYMENT_PROVIDER: 'mock',
   PAYMENT_MODE: 'test',
-  CRON_SECRET: 'test-only-cron-secret',
   EMAIL_PROVIDER: 'console',
   STORAGE_DRIVER: 'local',
 };

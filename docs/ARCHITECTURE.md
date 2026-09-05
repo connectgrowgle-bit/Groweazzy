@@ -459,3 +459,76 @@ instead of spawning its own. This dropped the HTTP suites from
 multi-second-per-test (cold dev-mode compilation) to ~500ms for 9 tests
 combined, and eliminated the deadlock entirely — a good reminder that a
 "real running server" requirement doesn't mean *one per test file*.
+
+## 21. Phase 4: Attribution & Commission
+
+Referral links work on any public URL (`/[slug]?ref=GEA10245`, but really
+any path — middleware checks every request). Middleware detects `?ref=`
+and hands off to `/api/attribution/click`, a Node route that looks up the
+affiliate, records the click, sets a signed (HMAC, not encrypted — the
+cookieId isn't secret) cookie, and redirects to the same URL with `ref`
+stripped — the actual mechanism behind "a refresh isn't a second click and
+a shared link doesn't re-attribute" from docs/ARCHITECTURE.md §6: the clean
+post-redirect URL simply carries no `ref` param to act on.
+
+`affiliateLinks.serviceId` is always `null` for now (site-wide links only):
+that column is a real FK into `services`, but the Phase 1 repository seam's
+catalogue (`src/lib/repository.ts`) is still static data, not real DB rows
+until Phase 9. Nothing about attribution or commission correctness actually
+needs a per-service link — commission attaches to the order/conversion, not
+the service — so this is a safe simplification, not a shortcut that will
+need re-architecting later.
+
+**The commission engine** (`src/lib/attribution/commission.ts`) implements
+the CANCELLED/REVERSED distinction from §6 precisely: `recordConversion`
+creates a PENDING EARNING entry with the commission rate locked in at
+creation time (a later policy change never retroactively changes what a
+past conversion earned). `cancelConversionCommission` only ever transitions
+that same still-PENDING row to CANCELLED — no new row, because nothing was
+ever real money. `reverseConversionCommission` is for the opposite case (a
+completed, captured-payment order later refunded): it never touches the
+original EARNING row, only inserts a new negative REVERSAL row, and — this
+is the part the original brief's mistake #8 got wrong ("partial refunds
+reversed the entire commission") — computes a **proportional** share from
+the refund amount, and does so **idempotently**: it reads what's already
+been reversed for a conversion from the ledger itself (summed from existing
+REVERSAL rows, not a separately maintained counter) and only inserts the
+delta, so a replayed webhook or a second larger partial refund both just
+work without double-reversing. All of this is tested directly in
+`tests/attribution-commission.test.ts`, including the idempotent-replay and
+delta-on-second-refund cases.
+
+### Two more real infrastructure mistakes, found live in this phase
+
+1. **A leftover shared test server silently poisoned the next run.**
+   `tests/global-setup.ts`'s teardown called `server.kill('SIGTERM')` on a
+   process spawned via `spawn('npx', ['next', 'start', ...])` — but `npx`
+   spawns `next` as its own child and doesn't reliably forward signals to
+   it, so the actual `next-server` process survived as an orphan after
+   every single test run, still bound to port 3900. The *next* run's
+   `isPortInUse`-free version at the time just polled `/api/health` until
+   it got a 200 — which the stale leftover server answered immediately,
+   so the suite proceeded to test against a build/env from a previous run
+   without any indication it wasn't testing its own. This surfaced as a
+   `verifyAttributionCookie` returning `null` on a cookie that had just
+   been set — looking exactly like a real signing bug — until checking
+   `ps aux` mid-investigation showed a `next-server` process from several
+   minutes earlier still alive and still listening. Fixed two ways: (a)
+   spawn the local `node_modules/.bin/next` binary directly instead of
+   through `npx`, so the handle this file holds IS the server process and
+   signals actually reach it; (b) `global-setup.ts` now checks whether
+   `TEST_SERVER_PORT` is already in use *before* starting anything and
+   throws immediately with an explicit "kill the leftover process" message
+   instead of silently reusing whatever answers there.
+2. **Two test processes need the exact same secret, and that's easy to
+   get wrong by accident.** `tests/setup.ts` (the vitest process, used by
+   direct library calls) and `tests/global-setup.ts` (the separately
+   spawned server process, used by HTTP-level calls) each set their own
+   `SESSION_SECRET`/`PII_ENCRYPTION_KEY`/`CRON_SECRET` defaults — and nothing
+   forced them to be the same literal string. A test that signs something in
+   one process (an HTTP request handled by the server) and verifies it in
+   the other (a direct call to `verifyAttributionCookie` from the test file)
+   silently fails the moment those values merely differ from each other,
+   with no error indicating *why*. Fixed by extracting them into
+   `tests/test-env-constants.ts`, imported by both files — one source of
+   truth for values that must be byte-identical across two OS processes.
