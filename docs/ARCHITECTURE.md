@@ -370,4 +370,34 @@ starting Phase 1's static pages, but D-1, D-2, D-3 and D-5 shape the schema
 Phase 4 builds on, so they should land before Phase 3 starts in earnest.
 
 Build order from here follows the phases in the project brief: Phase 1
-(public site + repository seam) next.
+(public site + repository seam), Phase 2 (auth & RBAC) — both done, see
+§19 — then Phase 3 (affiliate system) next.
+
+## 19. Phase 2 notes: two real mistakes caught before they shipped
+
+In the spirit of §9's "mistakes this build actually made" — these were
+caught during Phase 2, not hypothetical:
+
+1. **`src/db/index.ts` eagerly called the full `getEnv()`** just to read
+   `DATABASE_URL`/`DATABASE_SSL`, so any standalone script importing `db`
+   (the roles/permissions seed, in this case) failed validation for
+   Razorpay keys, session secret, etc. it had no reason to need. Fixed by
+   having the db module read those two vars directly from `process.env`,
+   and moving the actual "refuse to boot on bad config" enforcement to
+   `src/instrumentation.ts`'s `register()` hook, which Next.js runs once at
+   real server boot. `drizzle.config.ts` already followed this narrower
+   pattern; `src/db/index.ts` now matches it.
+2. **Confirmed, against a real Postgres instance, that Drizzle's
+   node-postgres driver puts the actual pg error (with `.code` and
+   `.constraint`) at `err.cause`, not on `err.message`** — checking
+   `err.message.includes('duplicate key')`, this build's first instinct,
+   never fires (`err.message` is just `"Failed query: <sql>"`). This is
+   verbatim mistake #4 from §9 of the original brief; `src/lib/db-errors.ts`
+   (`isUniqueViolation`) exists specifically so this check is written once,
+   correctly, and reused everywhere a unique-index violation needs to
+   become a clean error response.
+
+Both are covered by regression tests (`tests/db-errors.test.ts`; the seed
+script running successfully with only `DATABASE_URL` set is exercised by
+`npm run db:seed:roles` in the getting-started flow) so they can't silently
+reappear.

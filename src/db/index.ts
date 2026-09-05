@@ -1,30 +1,35 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { getEnv } from '@/lib/env';
 import * as schema from './schema';
 
-let pool: Pool | null = null;
-
-// Lazily created so importing this module (e.g. from a Zod-validated route
-// that hasn't touched the DB yet) never fails just because DATABASE_URL is
-// momentarily unset in a test harness.
+// Reads DATABASE_URL/DATABASE_SSL directly from process.env rather than
+// through getEnv() (src/lib/env.ts) on purpose: getEnv() validates the
+// *entire* app configuration (Razorpay keys, session secret, cron secret,
+// ...), which standalone scripts (drizzle-kit, scripts/seed/*) that only
+// need a database connection shouldn't have to satisfy. The full
+// cross-checked validation still runs — see src/instrumentation.ts, which
+// calls getEnv() once at Next.js server boot and refuses to start the app
+// on a mismatch. drizzle.config.ts follows this same pattern.
 function getPool(): Pool {
-  if (pool) return pool;
-  const env = getEnv();
-  pool = new Pool({
-    connectionString: env.DATABASE_URL,
-    ssl: env.DATABASE_SSL ? { rejectUnauthorized: true } : undefined,
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is not set');
+  }
+  return new Pool({
+    connectionString,
+    ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
   });
-  return pool;
 }
 
-export const db = drizzle(getPool(), { schema });
+const pool = getPool();
+
+export const db = drizzle(pool, { schema });
 
 // The commission scheduler needs its advisory lock on a connection it holds
 // for the whole run, not one borrowed from the shared pool — see
 // docs/ARCHITECTURE.md §12. Pool.connect() checks a client out for exclusive
 // use until the caller releases it.
 export async function getDedicatedConnection() {
-  const client = await getPool().connect();
+  const client = await pool.connect();
   return client;
 }
