@@ -184,6 +184,64 @@ real plan to point at; see docs/ARCHITECTURE.md §23):
 npm run db:seed:catalogue
 ```
 
+## Deploying to Vercel
+
+`npm run vercel-build` (auto-detected by Vercel in place of `npm run build`
+when present) runs `scripts/deploy-migrate.mjs` — a pure-Node equivalent of
+`ops/migrate.sh` for build environments that have Node but not necessarily a
+`psql` binary — then both seed scripts, then `next build`. All of it is
+safe to run on every single deploy: Drizzle migrations track what's already
+applied, every manual SQL statement is `IF NOT EXISTS`/`DROP ... IF EXISTS`
+before `ADD`, and both seed scripts are independently idempotent. This
+means a fresh Postgres database (nothing run against it yet) goes from
+empty to fully migrated, seeded, and built in one deploy — no separate
+manual migration step, and no direct network access to the database from
+anywhere other than the deploy platform's own build.
+
+1. Provision a Postgres 16 database reachable from the public internet — a
+   free serverless provider (e.g. Neon, Supabase) works fine; Razorpay
+   stays in mock mode (see below) so nothing here needs a paid tier.
+2. Import this repository into Vercel as a new project.
+3. Set these environment variables before the first deploy:
+
+   ```
+   APP_ENV=staging
+   APP_URL=https://<your-project-name>.vercel.app
+   DATABASE_URL=<your Postgres connection string>
+   DATABASE_SSL=true
+   SESSION_SECRET=<openssl rand -hex 32>
+   PII_ENCRYPTION_KEY=<openssl rand -hex 32>
+   CRON_SECRET=<openssl rand -hex 24>
+   PAYMENT_PROVIDER=mock
+   PAYMENT_MODE=test
+   EMAIL_PROVIDER=console
+   STORAGE_DRIVER=local
+   TRUSTED_PROXY_HEADER=x-forwarded-for
+   ```
+
+   `APP_ENV=staging` rather than `production` is deliberate here — `src/lib/env.ts`
+   requires `SENTRY_DSN` in production, and a demo/staging deploy with no
+   error-tracking account configured yet shouldn't need one just to boot.
+   `PAYMENT_PROVIDER=mock` means checkout, the affiliate registration fee,
+   and everything downstream of a "payment" all work end-to-end against
+   `MockPaymentGateway` (src/lib/payments/mock-gateway.ts) — no real money
+   moves and no Razorpay account is needed until Phase 13 swaps this to
+   `razorpay`/`live`.
+4. Deploy. If your project name was already taken and Vercel assigned a
+   different `.vercel.app` subdomain, update `APP_URL` to match and
+   redeploy once — `APP_URL` is used to build absolute links (e.g. the
+   attribution cookie's redirect target) and is validated at boot.
+5. Register an account on the live site, then grant it the `ADMIN` role
+   directly against the database (`scripts/seed/roles-permissions.ts`
+   creates the role but assigns it to nobody) to see the admin dashboard,
+   CRM, and training-authoring views:
+
+   ```sql
+   insert into user_roles (user_id, role_id)
+   select u.id, r.id from users u, roles r
+   where u.email = 'you@example.com' and r.key = 'ADMIN';
+   ```
+
 ## Testing
 
 Every suite runs against a **real PostgreSQL** database — nothing is mocked.
@@ -236,6 +294,7 @@ src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start 
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express
 scripts/seed/     roles-permissions.ts, catalogue.ts (both idempotent, prod-safe)
+scripts/deploy-migrate.mjs  Pure-Node migrate+verify, for deploy platforms with no psql binary (see Deploying to Vercel)
 ops/              migrate.sh, backup.sh, restore.sh
 tests/            Vitest suites — all against a real Postgres, see Testing below
 docs/             ARCHITECTURE.md
