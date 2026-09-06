@@ -23,6 +23,7 @@
     "react-dom": "19.2.8",
     "drizzle-orm": "0.45.2",
     "pg": "^8.13.1",
+    "pg-connection-string": "^2.14.0",
     "zod": "4.5.4",
     "argon2": "0.45.1"
   },

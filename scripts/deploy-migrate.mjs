@@ -13,13 +13,50 @@
 // "vercel-build" are documented idempotent in their own file headers.
 import { execSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
+import { lookup } from 'node:dns/promises';
 import path from 'node:path';
 import pg from 'pg';
+import { parse as parseConnectionString } from 'pg-connection-string';
 
 const { Pool } = pg;
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL must be set');
+  process.exit(1);
+}
+
+// A bad DATABASE_URL (a stray newline/space from copy-pasting into a
+// dashboard's env var field, a missing/extra character, the wrong var
+// entirely) surfaces from drizzle-kit as a bare `getaddrinfo ENOTFOUND
+// <garbage>` several layers down a stack trace — technically accurate,
+// useless for figuring out what's actually wrong. Parsing it up front and
+// printing (never the password) what this run is ABOUT to connect to,
+// then failing fast with a real DNS lookup if that host doesn't resolve,
+// turns that into an actionable first line of build output instead.
+const parsed = parseConnectionString(process.env.DATABASE_URL);
+console.log(
+  `==> DATABASE_URL parsed as: host=${parsed.host ?? '(missing)'} port=${parsed.port || 5432} database=${parsed.database ?? '(missing)'} user=${parsed.user ?? '(missing)'}`
+);
+if (!parsed.host) {
+  console.error(
+    '==> FAILED: DATABASE_URL has no host — check the value saved in your deploy platform for a stray newline, missing characters, or truncation.'
+  );
+  process.exit(1);
+}
+try {
+  // A DNS lookup normally resolves in milliseconds; capped at 10s so a
+  // genuinely unreachable host fails fast with a clear message instead of
+  // hanging until the whole build times out.
+  await Promise.race([
+    lookup(parsed.host),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 10s')), 10_000)),
+  ]);
+} catch (err) {
+  console.error(
+    `==> FAILED: could not resolve host "${parsed.host}" (${err instanceof Error ? err.message : String(err)}). ` +
+      'Re-check the DATABASE_URL saved in your deploy platform against your database provider\'s connection string, ' +
+      'exactly — a re-paste with no leading/trailing whitespace usually fixes this.'
+  );
   process.exit(1);
 }
 
