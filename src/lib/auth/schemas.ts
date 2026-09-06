@@ -13,3 +13,12 @@ export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email('Enter a valid email'),
   password: z.string().min(1, 'Password is required').max(200),
 });
+
+// Deliberately loose (not `.regex(/^\d{6}$/)`) — a TOTP code and a
+// recovery code look different (6 digits vs. "XXXX-XXXX"), and this one
+// schema covers the request body shape for every /api/auth/mfa/* route
+// that takes a code; the actual format dispatch happens in
+// src/app/api/auth/mfa/verify/route.ts against the normalized value.
+export const mfaCodeSchema = z.object({
+  code: z.string().trim().min(1, 'Code is required').max(20),
+});

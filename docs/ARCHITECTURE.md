@@ -1310,3 +1310,119 @@ New files: `src/lib/attribution/commission-scheduler.ts`,
 `withAdvisoryLock` (`src/db/index.ts`). New test files:
 `tests/commission-scheduler.test.ts`,
 `tests/commission-scheduler-routes.test.ts`.
+
+## 30. Phase 12 (cont'd): TOTP MFA
+
+Builds the enrollment/verification/disablement flow the actor guard has
+been gating on since Phase 2 (§4's "MFA is enforced in the actor-resolution
+guard... not the login route", `src/lib/auth/actor.ts`) and the schema has
+carried since the same phase (`users.mfaEnabled`/`mfaSecretEncrypted`,
+`sessions.mfaVerifiedAt`, `mfa_recovery_codes`, `mfa_used_codes`) — all of
+it sat inert (every account's `mfaEnabled` was always false) until this
+piece landed. Scoped as **self-service, opt-in per account**, matching
+`mfaEnabled`'s per-user (not per-role) column design: any signed-in user
+can turn it on for themselves from `/account`. A mandatory
+admins-must-have-MFA policy is a real, separate business decision this
+codebase does not assume — flagged here rather than silently guessed, in
+the same spirit as §13's D-notes.
+
+**RFC 6238 TOTP implemented directly against `node:crypto`**
+(`src/lib/auth/totp.ts`), not a dependency — the algorithm is small and
+permanently fixed once RFC 6238-compliant, and every authenticator app
+(Google Authenticator, Authy, 1Password, ...) interoperates against the
+exact same fixed parameters this uses: HMAC-SHA1, 6 digits, a 30-second
+step, ±1 step of drift tolerance. Verified against RFC 6238 Appendix B's
+own published test vectors (`tests/totp.test.ts`) — a real interoperability
+check, not just a round-trip against this module's own output. SHA-1 here
+is the universal TOTP interop default, not a weakened choice: the scheme's
+security rests on HMAC's keyed-PRF property, not on SHA-1 collision
+resistance.
+
+**The secret gets its own encryption-at-rest, deliberately not reusing
+`encryptPii`/`decryptPii`** (`src/lib/crypto/mfa-secret.ts`) — same
+AES-256-GCM scheme, but its own HKDF `info` string deriving an independent
+subkey from `PII_ENCRYPTION_KEY`, so a TOTP secret and KYC PII stay
+cryptographically separated even though both trace back to the one master
+key (§5's own key-separation reasoning, applied to a new kind of secret
+rather than bent to fit the existing one). `tests/mfa-secret.test.ts`
+proves the separation is real, not cosmetic: an MFA-secret ciphertext fed
+to `decryptPii` fails its GCM auth tag check.
+
+**Enrollment is two steps, not one** — `POST /api/auth/mfa/setup`
+generates and stores an encrypted secret but leaves `mfaEnabled` false;
+`POST /api/auth/mfa/enable` only flips it once the user submits a real
+code proving they actually captured the secret into an authenticator app.
+No QR image is rendered — no QR-generation library is a dependency of this
+project, so the otpauth:// URI and the raw base32 secret are shown as
+text, which every authenticator app also accepts as manual entry; this is
+a complete, working flow, not a placeholder for a nicer one. Enabling also
+sets the CURRENT session's `mfaVerifiedAt` — the browser that just
+enrolled must not immediately find itself locked out by the very guard it
+just turned on.
+
+**Recovery codes reuse `hashPassword`/`verifyPassword` directly**
+(`src/lib/auth/mfa-recovery-codes.ts`) rather than a second Argon2id
+config to keep in sync by hand — the schema's own comment already frames
+these as bearer credentials "hashed with Argon2id, not just stored/compared
+in plaintext," the identical reasoning passwords get. Ten single-use
+8-digit codes are generated per enrollment, shown exactly once (only their
+hashes are ever stored), with display formatting ("XXXX-XXXX") kept
+strictly separate from what's actually hashed (the raw 8 digits) so
+copy-pasting the dash back in, typing it without one, or a stray space are
+all accepted identically at verification.
+
+**The login-time challenge is the one route in this codebase allowed to
+look at an MFA-unverified session** (`POST /api/auth/mfa/verify`) — it
+reads the session cookie and calls `validateSessionToken` directly rather
+than `requireActor()`/`getActor()`, which exist specifically to refuse
+exactly this session. Rate-limited **per session, not per user**
+(`mfa:session:<sessionId>`, 5 attempts / 5 minutes) — a stolen or guessed
+session cookie is the actual threat this limit defends against, and it has
+to apply before the caller is a resolvable "actor" at all. A 6-digit code
+has only 3 valid values at any instant (current step ± drift) out of
+1,000,000 possible, so this makes brute-forcing it infeasible long before
+any window rolls over.
+
+**Replay protection is a unique-index insert, not a check-then-act** — a
+TOTP code that verifies cryptographically is additionally required to
+`INSERT INTO mfa_used_codes (user_id, time_step)` before being accepted;
+`mfa_used_codes_uidx` makes a second presentation of the exact same code,
+even within its own still-valid 30-second window, fail with a unique
+violation the route treats as "invalid," not a database error
+(`isUniqueViolation`, same helper every other unique-constraint-as-business-rule
+path in this codebase already uses). `tests/mfa-routes.test.ts` proves
+this against two DIFFERENT sessions (two separate login attempts) sharing
+the same code — the guard is keyed on `(userId, timeStep)`, not per-session,
+on purpose.
+
+**Recovery-code consumption is also race-safe**: claiming one is an
+`UPDATE ... WHERE id = ? AND used_at IS NULL`, so two concurrent requests
+racing the same recovery code can't both "win" — the loser's `UPDATE`
+affects zero rows and is treated as invalid rather than falling through to
+try another stored code.
+
+**Disabling MFA gets its own belt-and-suspenders, not just an
+already-MFA-verified session**: `POST /api/auth/mfa/disable` re-checks the
+account password AND a fresh code before clearing anything — the same
+reasoning a password change gets on most real platforms, since a live,
+already-verified session is exactly what an attacker who stole one would
+have. Deletes `mfa_recovery_codes`/`mfa_used_codes` for that user in the
+same transaction that clears `mfaEnabled`/`mfaSecretEncrypted` — leaving
+either behind would let a future re-enrollment inherit recovery codes or
+replay records for a secret that no longer exists.
+
+**Scope, stated plainly**: this is the whole self-service MFA lifecycle —
+setup, enable, the login challenge (TOTP or recovery code), and disable —
+plus the `/account` UI to drive it. It does not add a mandatory
+admin-role MFA policy (see the opening paragraph), backup-code
+regeneration after some codes are spent (a user who exhausts theirs today
+has to disable and re-enroll), or SMS/email-based MFA as an alternative
+factor — TOTP only.
+
+New files: `src/lib/auth/totp.ts`, `src/lib/auth/mfa-recovery-codes.ts`,
+`src/lib/crypto/mfa-secret.ts`, `src/app/api/auth/mfa/{setup,enable,verify,disable}/route.ts`,
+`src/components/MfaSettings.tsx`. Changed: `src/app/api/auth/login/route.ts`
+(returns `mfaRequired`), `src/components/LoginForm.tsx` (renders the code
+challenge step), `src/app/account/page.tsx` (mounts `MfaSettings`). New
+test files: `tests/totp.test.ts`, `tests/mfa-recovery-codes.test.ts`,
+`tests/mfa-secret.test.ts`, `tests/mfa-routes.test.ts`.

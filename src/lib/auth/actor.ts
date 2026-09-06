@@ -10,9 +10,10 @@ import type { PermissionKey } from './permissions-catalog';
 // deleting middleware.ts must not make anything more accessible, because
 // every route calls this itself (docs/ARCHITECTURE.md §4, rule 11).
 //
-// MFA note: full TOTP enrollment/verification ships in Phase 12, but the
-// gate lives here now so no route added between now and then needs
-// retrofitting. Today `user.mfaEnabled` is always false, so this is inert.
+// MFA note: this gate has lived here since Phase 2, before TOTP
+// enrollment/verification existed (Phase 12, docs/ARCHITECTURE.md §29),
+// specifically so no route added in between needed retrofitting once it
+// did. Self-service, opt-in per account — src/app/api/auth/mfa/*.
 export async function getActor(): Promise<ValidatedSession | null> {
   const token = await getSessionCookie();
   if (!token) return null;

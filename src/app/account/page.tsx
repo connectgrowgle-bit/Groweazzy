@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { PageShell } from '@/components/PageShell';
 import { LogoutButton } from '@/components/LogoutButton';
+import { MfaSettings } from '@/components/MfaSettings';
 import { getActor } from '@/lib/auth/actor';
 import { getPermissionsForUser } from '@/lib/auth/rbac';
 import { canAccessTraining } from '@/lib/training/access';
@@ -40,6 +41,8 @@ export default async function AccountPage() {
             </div>
           )}
         </dl>
+
+        <MfaSettings initiallyEnabled={actor.user.mfaEnabled} />
 
         <div className="mt-8 flex items-center gap-4">
           <Link href="/affiliate/dashboard" className="text-sm text-brand hover:underline">

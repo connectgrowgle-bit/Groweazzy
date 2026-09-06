@@ -125,9 +125,22 @@ decisions still open.
   triggers can never double-process. Every run is recorded in `job_runs`.
   See [`docs/ARCHITECTURE.md` §29](docs/ARCHITECTURE.md#29-phase-12-commission-scheduler).
 
+- **Phase 12, cont'd (TOTP MFA)** — done. Self-service, opt-in
+  two-factor auth via `/account` — enroll (`/api/auth/mfa/setup` +
+  `/enable`, RFC 6238 TOTP implemented directly against `node:crypto`,
+  verified against the RFC's own published test vectors), the login-time
+  challenge (`/api/auth/mfa/verify`, accepts a TOTP or a recovery code,
+  rate-limited per session), and `/api/auth/mfa/disable` (requires the
+  account password AND a fresh code). The secret gets its own
+  AES-256-GCM encryption with an independently-derived subkey, separate
+  from `encryptPii`. A TOTP code can never be replayed even within its
+  own 30-second window (a unique-index insert, not a check-then-act).
+  Mandatory MFA for admin roles is a deliberately open business decision,
+  not assumed. See [`docs/ARCHITECTURE.md` §30](docs/ARCHITECTURE.md#30-phase-12-contd-totp-mfa).
+
 Not yet built: user management/audit-log/payouts/settings screens (the
 permissions exist, Phase 2; no UI yet), payout batch construction and real
-disbursement, admin MFA, and real Razorpay gateway verification. See
+disbursement, and real Razorpay gateway verification. See
 [`docs/ARCHITECTURE.md` §18](docs/ARCHITECTURE.md#18-next-steps) for the
 business decisions (D-1 through D-10) this build still needs sign-off on.
 
@@ -204,19 +217,21 @@ now centralized in `tests/test-env-constants.ts`).
 ```
 src/app/          Next.js App Router pages and API routes
 src/db/schema/    Drizzle schema, one file per domain (auth, client, affiliate, training, support)
-src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue
+src/lib/auth/     password, session, cookies, rbac, actor guard, permission catalogue, totp.ts + mfa-recovery-codes.ts (Phase 12)
 src/lib/affiliate/    lifecycle state machine, KYC, registration fee flow, commission policy
 src/lib/attribution/  click tracking + signed cookie, the commission ledger engine, and the release-to-AVAILABLE scheduler (Phase 12)
 src/lib/orders/   order lifecycle state machine, checkout, onboarding draft/submit, meetings, requirements lock
 src/lib/crm/      self-populating contact sync (called from transitionOrderStage), manual edits/notes/tasks/assignment
 src/lib/training/ access gate (ACTIVE affiliates), published-only reads, authoring/publish guards, progress tracking
 src/lib/admin/    live (uncached) revenue + affiliate-performance reporting
-src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting
+src/lib/crypto/   AES-256-GCM PII encryption + keyed-HMAC fingerprinting, mfa-secret.ts (its own independently-derived subkey, Phase 12)
 src/lib/payments/ PaymentGateway interface, MockPaymentGateway, RazorpayGateway, webhook signature + confirm helpers
 src/lib/          repository.ts (content seam, DB-backed since Phase 9), catalogue.ts (plan-key resolver), catalogue-admin.ts (service.edit/service.pricing CRUD + price history), catalogue-seed-data.ts (one-time bootstrap content), onboarding-schemas.ts, env.ts (startup validation), db-errors.ts, net.ts (fail-closed trusted-proxy client IP), rate-limit.ts (DB-backed fixed-window limiter + stale-bucket sweep), safe-redirect.ts (open-redirect-safe `next` handling)
 src/app/not-found.tsx, error.tsx, global-error.tsx   Branded error handling (Phase 11)
 src/app/sitemap.ts, robots.ts, icon.tsx              Crawler/production hygiene (Phase 11)
 src/app/api/cron/release-commissions/  CRON_SECRET-gated trigger for the commission scheduler (Phase 12)
+src/app/api/auth/mfa/{setup,enable,verify,disable}/  Self-service TOTP MFA (Phase 12)
+src/components/MfaSettings.tsx  /account's MFA enroll/disable UI (Phase 12)
 src/instrumentation.ts   Runs getEnv() once at server boot — refuses to start on bad config
 middleware.ts     Coarse UX redirect only — NOT the security boundary, see its own comment
 drizzle/manual/   Hand-written SQL for constraints Drizzle's DSL can't express

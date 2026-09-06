@@ -77,5 +77,11 @@ export async function POST(request: Request) {
   await setSessionCookie(token, session.absoluteExpiresAt);
   await logAudit({ actorUserId: user.id, action: 'auth.login', outcome: 'ALLOWED', ipAddress });
 
-  return Response.json({ ok: true });
+  // The session row exists and the cookie is set either way — but for an
+  // MFA-enabled account it's created with mfaVerifiedAt still null, which
+  // the actor guard (src/lib/auth/actor.ts) treats exactly like an expired
+  // session until POST /api/auth/mfa/verify clears it. `mfaRequired` here
+  // is just the client-facing signal to prompt for that second step next,
+  // not a separate authorization state of its own.
+  return Response.json({ ok: true, mfaRequired: user.mfaEnabled });
 }
